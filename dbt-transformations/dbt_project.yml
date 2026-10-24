@@ -1,0 +1,26 @@
+name: 'btc_market_analytics'
+version: '1.0.0'
+config-version: 2
+
+profile: 'btc_market_analytics'
+
+model-paths: ["models"]
+analysis-paths: ["analyses"]
+test-paths: ["tests"]
+seed-paths: ["seeds"]
+macro-paths: ["macros"]
+snapshot-paths: ["snapshots"]
+
+clean-targets:
+  - "target"
+  - "dbt_packages"
+
+models:
+  btc_market_analytics:
+    staging:
+      +schema: silver
+      +materialized: view
+    marts:
+      +schema: gold
+      +materialized: table
+      +on_schema_change: "append_new_columns"

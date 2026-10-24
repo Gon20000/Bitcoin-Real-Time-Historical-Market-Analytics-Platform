@@ -1,0 +1,292 @@
+x-airflow-common: &airflow-common
+  build:
+    context: ./airflow
+    dockerfile: Dockerfile
+  image: btc-analytics/airflow:2.8.1-python3.11
+  env_file:
+    - .env
+  environment:
+    - AIRFLOW__CORE__EXECUTOR=LocalExecutor
+    - AIRFLOW__DATABASE__SQL_ALCHEMY_CONN=postgresql+psycopg2://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
+    - AIRFLOW__CORE__FERNET_KEY=${FERNET_KEY}
+    - AIRFLOW__CORE__LOAD_EXAMPLES=False
+    - AIRFLOW__CORE__DAGS_ARE_PAUSED_AT_CREATION=True
+    - AIRFLOW_CONN_SPARK_DEFAULT=spark://spark-master:7077
+    - DBT_PROFILES_DIR=/opt/airflow/dbt-transformations
+    - PYSPARK_PYTHON=python3.11
+    - PYSPARK_DRIVER_PYTHON=python3.11
+  volumes:
+    - ./airflow/dags:/opt/airflow/dags
+    - ./airflow/plugins:/opt/airflow/plugins
+    - ./airflow/logs:/opt/airflow/logs
+    - ./dbt-transformations:/opt/airflow/dbt-transformations
+    - ./spark-jobs:/opt/airflow/spark-jobs
+    - ./data:/opt/bitnami/spark/data
+    - ./data/checkpoints:/opt/bitnami/spark/checkpoints
+  depends_on:
+    postgres:
+      condition: service_healthy
+  networks:
+    - btc-analytics-net
+
+x-spark-common: &spark-common
+  image: bitnami/spark:3.5.0
+  env_file:
+    - .env
+  volumes:
+    - ./spark-jobs:/opt/bitnami/spark/jobs
+    - ./data:/opt/bitnami/spark/data
+    - ./data/checkpoints:/opt/bitnami/spark/checkpoints
+  networks:
+    - btc-analytics-net
+
+services:
+
+  # ----------------------------------------------------------------------------
+  # 1. SPEED LAYER (Kafka KRaft Broker & Binance WS Producer)
+  # ----------------------------------------------------------------------------
+  kafka:
+    image: bitnami/kafka:3.7.0
+    container_name: btc-kafka-broker
+    profiles: ["streaming", "full-stack"]
+    ports:
+      - "9092:9092"
+    environment:
+      # KRaft Mode Configuration (No ZooKeeper)
+      - KAFKA_CFG_NODE_ID=1
+      - KAFKA_CFG_PROCESS_ROLES=broker,controller
+      - KAFKA_CFG_CONTROLLER_LISTENER_NAMES=CONTROLLER
+      - KAFKA_CFG_CONTROLLER_QUORUM_VOTERS=1@kafka:9093
+      # Listeners (Internal Docker network on 29092, Host machine on 9092)
+      - KAFKA_CFG_LISTENERS=PLAINTEXT://:29092,CONTROLLER://:9093,PLAINTEXT_HOST://:9092
+      - KAFKA_CFG_ADVERTISED_LISTENERS=PLAINTEXT://kafka:29092,PLAINTEXT_HOST://localhost:9092
+      - KAFKA_CFG_LISTENER_SECURITY_PROTOCOL_MAP=CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT,PLAINTEXT_HOST:PLAINTEXT
+      - KAFKA_CFG_INTER_BROKER_LISTENER_NAME=PLAINTEXT
+      # Topic & Retention Specifications (3 Partitions, 24-Hour Retention)
+      - KAFKA_CFG_NUM_PARTITIONS=3
+      - KAFKA_CFG_LOG_RETENTION_HOURS=24
+      - KAFKA_CFG_AUTO_CREATE_TOPICS_ENABLE=true
+      - KAFKA_KRAFT_CLUSTER_ID=${KAFKA_CLUSTER_ID:-btc-kraft-cluster-v1}
+    volumes:
+      - kafka_data:/bitnami/kafka
+    healthcheck:
+      test: ["CMD-SHELL", "/opt/bitnami/kafka/bin/kafka-topics.sh --bootstrap-server localhost:29092 --list"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - btc-analytics-net
+
+  kafka-producer:
+    build:
+      context: ./kafka-streaming
+      dockerfile: Dockerfile
+    container_name: btc-ws-producer
+    profiles: ["streaming", "full-stack"]
+    env_file:
+      - .env
+    environment:
+      - KAFKA_BOOTSTRAP_SERVERS=kafka:29092
+      - KAFKA_TOPIC=${KAFKA_TOPIC:-prod.binance.btc_usdt_1s.v1}
+      - BINANCE_WS_URL=wss://fstream.binance.com/ws/btcusdt@kline_1s
+    volumes:
+      - ./kafka-streaming/producer:/app/producer
+    depends_on:
+      kafka:
+        condition: service_healthy
+    restart: unless-stopped
+    networks:
+      - btc-analytics-net
+
+  # ----------------------------------------------------------------------------
+  # 2. COMPUTE LAYER (PySpark 3.5 Cluster, Structured Streaming & Batch)
+  # ----------------------------------------------------------------------------
+  spark-master:
+    <<: *spark-common
+    container_name: btc-spark-master
+    profiles: ["streaming", "batch", "orchestration", "full-stack"]
+    environment:
+      - SPARK_MODE=master
+      - SPARK_RPC_AUTHENTICATION_ENABLED=no
+      - SPARK_RPC_ENCRYPTION_ENABLED=no
+    ports:
+      - "8081:8080" # Spark Master Web UI
+      - "7077:7077" # Spark Master RPC Port
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  spark-worker:
+    <<: *spark-common
+    container_name: btc-spark-worker
+    profiles: ["streaming", "batch", "orchestration", "full-stack"]
+    environment:
+      - SPARK_MODE=worker
+      - SPARK_MASTER_URL=spark://spark-master:7077
+      - SPARK_WORKER_MEMORY=${SPARK_WORKER_MEMORY:-4G}
+      - SPARK_WORKER_CORES=${SPARK_WORKER_CORES:-2}
+    depends_on:
+      spark-master:
+        condition: service_healthy
+
+  spark-streaming-job:
+    <<: *spark-common
+    container_name: btc-spark-streaming
+    profiles: ["streaming", "full-stack"]
+    command: >
+      /opt/bitnami/spark/bin/spark-submit
+      --master spark://spark-master:7077
+      --packages org.apache.spark:spark-sql-kafka-0-10_2.12:3.5.0,io.delta:delta-spark_2.12:3.1.0
+      --conf "spark.sql.extensions=io.delta.sql.DeltaSparkSessionExtension"
+      --conf "spark.sql.catalog.spark_catalog=org.apache.spark.sql.delta.catalog.DeltaCatalog"
+      --conf "spark.sql.session.timeZone=UTC"
+      /opt/bitnami/spark/jobs/stream_bronze_to_silver.py
+    depends_on:
+      kafka:
+        condition: service_healthy
+      spark-master:
+        condition: service_healthy
+    restart: on-failure
+
+  spark-batch-job:
+    <<: *spark-common
+    container_name: btc-spark-batch-manual
+    profiles: ["batch"] # On-demand CLI profile; scheduled runs are triggered by Airflow
+    command: >
+      /opt/bitnami/spark/bin/spark-submit
+      --master spark://spark-master:7077
+      --packages io.delta:delta-spark_2.12:3.1.0
+      --conf "spark.sql.extensions=io.delta.sql.DeltaSparkSessionExtension"
+      --conf "spark.sql.catalog.spark_catalog=org.apache.spark.sql.delta.catalog.DeltaCatalog"
+      --conf "spark.sql.session.timeZone=UTC"
+      /opt/bitnami/spark/jobs/batch_historical_ingest.py
+    depends_on:
+      spark-master:
+        condition: service_healthy
+
+  # ----------------------------------------------------------------------------
+  # 3. ORCHESTRATION LAYER (Postgres 13 + Airflow 2.8.1 + Astronomer Cosmos)
+  # ----------------------------------------------------------------------------
+  postgres:
+    image: postgres:13
+    container_name: btc-airflow-postgres
+    profiles: ["orchestration", "full-stack"]
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB}
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    networks:
+      - btc-analytics-net
+
+  airflow-init:
+    <<: *airflow-common
+    container_name: btc-airflow-init
+    profiles: ["orchestration", "full-stack"]
+    command: version
+    environment:
+      - AIRFLOW__CORE__EXECUTOR=LocalExecutor
+      - AIRFLOW__DATABASE__SQL_ALCHEMY_CONN=postgresql+psycopg2://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
+      - AIRFLOW__CORE__FERNET_KEY=${FERNET_KEY}
+      - _AIRFLOW_DB_UPGRADE=true
+      - _AIRFLOW_WWW_USER_CREATE=true
+      - _AIRFLOW_WWW_USER_USERNAME=${AIRFLOW_ADMIN_USER}
+      - _AIRFLOW_WWW_USER_PASSWORD=${AIRFLOW_ADMIN_PASSWORD}
+
+  airflow-webserver:
+    <<: *airflow-common
+    container_name: btc-airflow-webserver
+    profiles: ["orchestration", "full-stack"]
+    command: webserver
+    ports:
+      - "8080:8080"
+    healthcheck:
+      test: ["CMD", "curl", "--fail", "http://localhost:8080/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+    depends_on:
+      postgres:
+        condition: service_healthy
+      airflow-init:
+        condition: service_completed_successfully
+    restart: unless-stopped
+
+  airflow-scheduler:
+    <<: *airflow-common
+    container_name: btc-airflow-scheduler
+    profiles: ["orchestration", "full-stack"]
+    command: scheduler
+    healthcheck:
+      test: ["CMD-SHELL", "airflow jobs check --job-type SchedulerJob --hostname \"$${HOSTNAME}\""]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+    depends_on:
+      postgres:
+        condition: service_healthy
+      airflow-init:
+        condition: service_completed_successfully
+    restart: unless-stopped
+
+  # ----------------------------------------------------------------------------
+  # 4. QUERY & SEMANTIC LAYER (Trino + dbt Core / MetricFlow Workspace)
+  # ----------------------------------------------------------------------------
+  trino:
+    image: trinodb/trino:440
+    container_name: btc-trino-engine
+    profiles: ["analytics", "orchestration", "full-stack"]
+    ports:
+      - "8082:8080" # Mapped to 8082 on host to avoid conflict with Airflow (8080) and Spark (8081)
+    volumes:
+      - ./data:/opt/bitnami/spark/data
+      - ./trino/etc/catalog:/etc/trino/catalog
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:8080/v1/info || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - btc-analytics-net
+
+  dbt-workspace:
+    build:
+      context: ./airflow
+      dockerfile: Dockerfile
+    image: btc-analytics/airflow:2.8.1-python3.11
+    container_name: btc-dbt-workspace
+    profiles: ["analytics", "full-stack"]
+    working_dir: /opt/airflow/dbt-transformations
+    env_file:
+      - .env
+    environment:
+      - DBT_PROFILES_DIR=/opt/airflow/dbt-transformations
+      - TRINO_HOST=trino
+      - TRINO_PORT=8080
+    volumes:
+      - ./dbt-transformations:/opt/airflow/dbt-transformations
+      - ./data:/opt/bitnami/spark/data
+    depends_on:
+      trino:
+        condition: service_healthy
+    command: tail -f /dev/null
+    networks:
+      - btc-analytics-net
+
+networks:
+  btc-analytics-net:
+    driver: bridge
+
+volumes:
+  kafka_data:
+  postgres_data:

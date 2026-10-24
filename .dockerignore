@@ -1,0 +1,32 @@
+# Git & Governance
+.git
+.github
+.gitignore
+.pre-commit-config.yaml
+
+# Local Data Lake & Logs (CRITICAL: Prevents bloated image builds)
+data/
+airflow/logs/
+
+# Environment & Secrets
+.env
+.env.*
+!.env.example
+
+# Python Caches & Virtual Environments
+**/__pycache__/
+**/*.py[cod]
+.pytest_cache/
+.venv/
+venv/
+
+# dbt Build Artifacts
+dbt-transformations/target/
+dbt-transformations/dbt_packages/
+dbt-transformations/logs/
+
+# Documentation & IDE
+docs/
+README.md
+.vscode/
+.idea/

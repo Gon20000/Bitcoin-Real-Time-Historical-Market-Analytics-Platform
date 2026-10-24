@@ -1,0 +1,3 @@
+# CODEOWNERS
+# Auto-route PR reviews based on folder paths
+*       @gon20000

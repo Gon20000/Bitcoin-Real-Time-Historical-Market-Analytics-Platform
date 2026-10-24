@@ -1,0 +1,7 @@
+cconfluent-kafka>=2.3.0
+websockets>=12.0
+tenacity>=8.2.3
+python-dotenv>=1.0.1onfluent-kafka>=2.3.0
+websockets>=12.0
+tenacity>=8.2.3
+python-dotenv>=1.0.1
