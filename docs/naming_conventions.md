@@ -12,9 +12,9 @@ Data engines (Trino, Spark, and our future Synapse migration) handle casing diff
 *   **Silver (Staging/Cleaned):** Prefix with `stg_`.
     *   *Format:* `stg_<source>_<entity>_<grain>`
     *   *Example:* `stg_binance_klines_1s`
-*   **Gold (Facts & Dimensions):** Prefix with `fct_` (for time-series facts) or `dim_` (for descriptive dimensions).
-    *   *Format:* `fct_<domain>_<entity>_<grain>` OR `dim_<entity>`
-    *   *Example:* `fct_btc_klines_1s`, `dim_market_regime`
+*   **Gold (Facts & Dimensions):** Prefix with `fact_` (for time-series facts) or `dim_` (for descriptive dimensions).
+    *   *Format:* `fact_<domain>_<entity>_<grain>` OR `dim_<entity>`
+    *   *Example:* `fact_btc_klines_1s`, `dim_market_regime`
 
 ### Columns & Fields
 *   **Surrogate & Foreign Keys:** Always suffix with `_key` (e.g., `date_key`, `market_regime_key`).
