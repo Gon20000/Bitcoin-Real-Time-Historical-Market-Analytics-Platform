@@ -99,3 +99,8 @@ dbt-transformations/logs/
 .DS_Store
 .vscode/
 .idea/
+
+# Architecture diagrams (raw draw.io files)
+docs/architecture_diagrams/00_conceptuall_schema.drawio
+docs/architecture_diagrams/01_star_schema.drawio
+*.drawio
