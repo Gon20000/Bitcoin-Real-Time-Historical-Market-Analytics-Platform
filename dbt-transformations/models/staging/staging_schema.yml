@@ -1,0 +1,45 @@
+version: 2
+
+models:
+  - name: stg_binance_klines_1s
+    description: "Staging view over Silver 1-second klines, enforcing 64-bit DECIMAL precision and closed-candle filtering."
+    columns:
+      - name: open_time
+        description: "1-second boundary UTC open timestamp"
+        tests:
+          - not_null
+          - unique
+      - name: open_price
+        description: "Opening price in DECIMAL(18, 8)"
+        tests:
+          - not_null
+      - name: high_price
+        description: "High price in DECIMAL(18, 8)"
+        tests:
+          - not_null
+      - name: low_price
+        description: "Low price in DECIMAL(18, 8)"
+        tests:
+          - not_null
+      - name: close_price
+        description: "Closing price in DECIMAL(18, 8)"
+        tests:
+          - not_null
+      - name: base_asset_volume
+        description: "Base asset (BTC) volume in DECIMAL(18, 8)"
+        tests:
+          - not_null
+      - name: quote_asset_volume
+        description: "Quote asset (USDT) volume in DECIMAL(18, 8)"
+        tests:
+          - not_null
+      - name: number_of_trades
+        description: "Trade execution count"
+        tests:
+          - not_null
+      - name: is_candle_closed
+        description: "Idempotency flag (must be true)"
+        tests:
+          - not_null
+          - accepted_values:
+              values: [true]

@@ -1,0 +1,35 @@
+version: 2
+
+sources:
+  - name: silver
+    database: delta
+    schema: silver
+    description: "Cleaned and unified Delta Lake tables in the Silver Layer"
+    tables:
+      - name: binance_klines_1s
+        description: "Standardized 1-second BTC/USDT candlestick data from speed and batch layers"
+        columns:
+          - name: open_time
+            description: "1-second boundary UTC open timestamp"
+          - name: open_price
+            description: "Opening price for the 1-second candle"
+          - name: high_price
+            description: "Highest traded price in the 1-second window"
+          - name: low_price
+            description: "Lowest traded price in the 1-second window"
+          - name: close_price
+            description: "Closing price for the 1-second candle"
+          - name: base_asset_volume
+            description: "Total volume traded in BTC during the 1-second window"
+          - name: close_time
+            description: "1-second boundary UTC close timestamp"
+          - name: quote_asset_volume
+            description: "Total volume traded in USDT during the 1-second window"
+          - name: number_of_trades
+            description: "Count of individual trades executed"
+          - name: taker_buy_base_asset_volume
+            description: "Taker buy volume in BTC"
+          - name: taker_buy_quote_asset_volume
+            description: "Taker buy volume in USDT"
+          - name: is_candle_closed
+            description: "Boolean indicating closed 1s candle (k.x flag = true)"

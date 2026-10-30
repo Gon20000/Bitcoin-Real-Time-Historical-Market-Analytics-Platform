@@ -1,0 +1,117 @@
+version: 2
+
+models:
+  - name: dim_date
+    description: "Date dimension for star schema supporting UTC and Egypt local time (Africa/Cairo)"
+    columns:
+      - name: date_key
+        description: "Surrogate key in YYYYMMDD format"
+        tests:
+          - unique
+          - not_null
+      - name: date_utc
+        description: "Calendar date in UTC"
+        tests:
+          - not_null
+      - name: date_eg
+        description: "Calendar date in Cairo local time"
+        tests:
+          - not_null
+
+  - name: dim_time
+    description: "Time dimension at second-level grain (86,400 seconds) with trading session tags"
+    columns:
+      - name: time_key
+        description: "Surrogate key in HHMMSS format"
+        tests:
+          - unique
+          - not_null
+      - name: time_utc
+        description: "Time string in UTC (HH:MM:SS)"
+        tests:
+          - not_null
+      - name: trading_session
+        description: "Trading session (Asian, European, US-EU Overlap, US Afternoon, Pacific)"
+        tests:
+          - not_null
+
+  - name: dim_market_regime
+    description: "Market regime classification dimension"
+    columns:
+      - name: market_regime_key
+        description: "Primary key for market regime"
+        tests:
+          - unique
+          - not_null
+      - name: regime_code
+        description: "Short identifier code for regime"
+        tests:
+          - not_null
+          - unique
+
+  - name: fct_btc_klines_1s
+    description: "Gold Fact table containing 1-second BTC/USDT candlestick data and financial features"
+    columns:
+      - name: kline_id
+        description: "Unique timestamp surrogate key (YYYYMMDDHHMMSS)"
+        tests:
+          - unique
+          - not_null
+      - name: open_time
+        description: "1-second boundary UTC open timestamp"
+        tests:
+          - unique
+          - not_null
+      - name: date_key
+        description: "Foreign key to dim_date"
+        tests:
+          - not_null
+          - relationships:
+              to: ref('dim_date')
+              field: date_key
+      - name: time_key
+        description: "Foreign key to dim_time"
+        tests:
+          - not_null
+          - relationships:
+              to: ref('dim_time')
+              field: time_key
+      - name: market_regime_key
+        description: "Foreign key to dim_market_regime"
+        tests:
+          - not_null
+          - relationships:
+              to: ref('dim_market_regime')
+              field: market_regime_key
+      - name: open_price
+        description: "Open price in DECIMAL(18, 8)"
+        tests:
+          - not_null
+      - name: high_price
+        description: "High price in DECIMAL(18, 8)"
+        tests:
+          - not_null
+      - name: low_price
+        description: "Low price in DECIMAL(18, 8)"
+        tests:
+          - not_null
+      - name: close_price
+        description: "Close price in DECIMAL(18, 8)"
+        tests:
+          - not_null
+      - name: base_asset_volume
+        description: "Traded volume in BTC"
+        tests:
+          - not_null
+      - name: log_return
+        description: "Logarithmic return from previous 1s candle"
+        tests:
+          - not_null
+      - name: realized_volatility_15s
+        description: "15-second rolling realized volatility"
+        tests:
+          - not_null
+      - name: realized_volatility_60s
+        description: "60-second rolling realized volatility"
+        tests:
+          - not_null
