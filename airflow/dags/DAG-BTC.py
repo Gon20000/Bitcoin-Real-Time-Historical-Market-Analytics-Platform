@@ -11,18 +11,136 @@ from airflow import DAG
 from airflow.models.param import Param
 from airflow.operators.python import PythonOperator, get_current_context
 
+
 DATA_DIR = Path("/usr/local/airflow/dags/data/bronze/historical")
 
 SYMBOL = "BTCUSDT"
 INTERVAL = "1s"
 
-BASE_URL = (
+MONTHLY_URL = (
     "https://data.binance.vision/data/spot/monthly/"
+    f"klines/{SYMBOL}/{INTERVAL}/"
+)
+
+DAILY_URL = (
+    "https://data.binance.vision/data/spot/daily/"
     f"klines/{SYMBOL}/{INTERVAL}/"
 )
 
 CHUNK_SIZE = 1024 * 1024
 LOG_INTERVAL = 100 * 1024 * 1024
+
+
+def download_archive(url, filename, csv_filename):
+
+    file_path = DATA_DIR / filename
+    csv_file = DATA_DIR / csv_filename
+
+    # Skip existing CSV files
+    if csv_file.exists():
+
+        print(f"Already extracted: {csv_filename}")
+
+        if file_path.exists():
+            file_path.unlink()
+            print(f"Deleted ZIP: {filename}")
+
+        return
+
+    # Download archive if it doesn't exist
+    if not file_path.exists():
+
+        print(f"Downloading: {filename}")
+
+        # Download checksum
+        with urlopen(url + ".CHECKSUM", timeout=60) as response:
+            expected_hash = response.read().decode().split()[0]
+
+        temp_path = file_path.with_suffix(".zip.tmp")
+
+        try:
+            # Download to temporary file
+            with urlopen(url, timeout=120) as response:
+                with temp_path.open("wb") as output:
+
+                    while chunk := response.read(CHUNK_SIZE):
+                        output.write(chunk)
+
+            # Verify SHA-256
+            sha256 = hashlib.sha256()
+
+            with temp_path.open("rb") as archive:
+                while chunk := archive.read(CHUNK_SIZE):
+                    sha256.update(chunk)
+
+            actual_hash = sha256.hexdigest()
+
+            if actual_hash.lower() != expected_hash.lower():
+                raise ValueError(
+                    f"Checksum mismatch: {filename}"
+                )
+
+            temp_path.replace(file_path)
+
+            print(f"Verified and saved: {filename}")
+
+        finally:
+            if temp_path.exists():
+                temp_path.unlink()
+
+    # Extract archive with progress logging
+    print(f"Starting extraction: {filename}")
+
+    with zipfile.ZipFile(file_path, "r") as archive:
+
+        for member in archive.infolist():
+
+            if member.is_dir():
+                continue
+
+            target_path = DATA_DIR / Path(member.filename).name
+
+            extracted_size = 0
+            total_size = member.file_size
+            last_logged = 0
+
+            with archive.open(member) as source:
+                with target_path.open("wb") as target:
+
+                    while chunk := source.read(CHUNK_SIZE):
+
+                        target.write(chunk)
+                        extracted_size += len(chunk)
+
+                        if (
+                            extracted_size - last_logged >= LOG_INTERVAL
+                            or extracted_size == total_size
+                        ):
+
+                            progress = (
+                                extracted_size / total_size * 100
+                                if total_size else 100
+                            )
+
+                            print(
+                                f"{csv_filename}: "
+                                f"{progress:.1f}% "
+                                f"({extracted_size / (1024**3):.2f} GB)"
+                            )
+
+                            last_logged = extracted_size
+
+    if not csv_file.exists():
+        raise FileNotFoundError(
+            f"Expected CSV not found: {csv_filename}"
+        )
+
+    print(f"Extraction completed: {csv_filename}")
+
+    # Delete ZIP after successful extraction
+    file_path.unlink()
+
+    print(f"Deleted ZIP: {filename}")
 
 
 def download_data():
@@ -43,161 +161,118 @@ def download_data():
 
     DATA_DIR.mkdir(parents=True, exist_ok=True)
 
-    current_month = start_date.start_of("month")
-    last_month = end_date.start_of("month")
+    today = pendulum.now("UTC").start_of("day")
+    current_month_start = today.start_of("month")
+    yesterday = today.subtract(days=1)
 
-    while current_month <= last_month:
+    print("=" * 50)
+    print("BINANCE HISTORICAL DATA EXTRACTION")
+    print(f"Symbol: {SYMBOL}")
+    print(f"Interval: {INTERVAL}")
+    print(f"Start date: {start_date.to_date_string()}")
+    print(f"End date: {end_date.to_date_string()}")
+    print("=" * 50)
 
-        month = current_month.format("YYYY-MM")
+    # ------------------------------------------------
+    # 1. Download previous months as monthly archives
+    # ------------------------------------------------
 
-        filename = f"{SYMBOL}-{INTERVAL}-{month}.zip"
-        file_path = DATA_DIR / filename
-        csv_file = DATA_DIR / filename.replace(".zip", ".csv")
-        url = BASE_URL + filename
+    if start_date < current_month_start:
 
-        print(f"Processing month: {month}")
+        monthly_end = min(
+            end_date,
+            current_month_start.subtract(days=1)
+        )
 
-        try:
+        if start_date <= monthly_end:
 
-            # Skip if CSV already exists
-            if csv_file.exists():
+            current_month = start_date.start_of("month")
+            last_month = monthly_end.start_of("month")
 
-                print(f"Already extracted: {csv_file.name}")
+            while current_month <= last_month:
 
-                if file_path.exists():
-                    file_path.unlink()
-                    print(f"Deleted ZIP: {filename}")
+                month = current_month.format("YYYY-MM")
 
-            else:
+                filename = (
+                    f"{SYMBOL}-{INTERVAL}-{month}.zip"
+                )
 
-                # Download archive if it doesn't exist
-                if not file_path.exists():
+                csv_filename = (
+                    f"{SYMBOL}-{INTERVAL}-{month}.csv"
+                )
 
-                    print(f"Downloading: {filename}")
+                url = MONTHLY_URL + filename
 
-                    with urlopen(
-                        url + ".CHECKSUM", timeout=60
-                    ) as response:
-                        expected_hash = (
-                            response.read().decode().split()[0]
-                        )
+                print(f"\nProcessing monthly archive: {month}")
 
-                    temp_path = file_path.with_suffix(".zip.tmp")
+                download_archive(
+                    url,
+                    filename,
+                    csv_filename
+                )
 
-                    try:
-                        with urlopen(url, timeout=120) as response:
-                            with temp_path.open("wb") as output:
+                current_month = current_month.add(months=1)
 
-                                while chunk := response.read(CHUNK_SIZE):
-                                    output.write(chunk)
+    # ------------------------------------------------
+    # 2. Download current month as daily archives
+    # ------------------------------------------------
 
-                        # Verify SHA-256 checksum
-                        sha256 = hashlib.sha256()
+    daily_start = max(
+        start_date,
+        current_month_start
+    )
 
-                        with temp_path.open("rb") as archive:
-                            while chunk := archive.read(CHUNK_SIZE):
-                                sha256.update(chunk)
+    daily_end = min(
+        end_date,
+        yesterday
+    )
 
-                        actual_hash = sha256.hexdigest()
+    if daily_start <= daily_end:
 
-                        if actual_hash.lower() != expected_hash.lower():
-                            raise ValueError(
-                                f"Checksum mismatch: {filename}"
-                            )
+        current_day = daily_start
 
-                        temp_path.replace(file_path)
+        while current_day <= daily_end:
 
-                        print(f"Verified and saved: {filename}")
+            day = current_day.format("YYYY-MM-DD")
 
-                    finally:
-                        if temp_path.exists():
-                            temp_path.unlink()
-
-                # Extract archive with progress logging
-                print(f"Starting extraction: {filename}")
-
-                with zipfile.ZipFile(file_path, "r") as archive:
-
-                    for member in archive.infolist():
-
-                        if member.is_dir():
-                            continue
-
-                        target_path = (
-                            DATA_DIR / member.filename
-                        ).resolve()
-
-                        if not target_path.is_relative_to(
-                            DATA_DIR.resolve()
-                        ):
-                            raise ValueError(
-                                f"Unsafe archive path: {member.filename}"
-                            )
-
-                        target_path.parent.mkdir(
-                            parents=True, exist_ok=True
-                        )
-
-                        extracted_size = 0
-                        total_size = member.file_size
-                        last_logged = 0
-
-                        with archive.open(member) as source:
-                            with target_path.open("wb") as target:
-
-                                while chunk := source.read(CHUNK_SIZE):
-
-                                    target.write(chunk)
-                                    extracted_size += len(chunk)
-
-                                    if (
-                                        extracted_size - last_logged
-                                        >= LOG_INTERVAL
-                                        or extracted_size == total_size
-                                    ):
-
-                                        progress = (
-                                            extracted_size / total_size * 100
-                                            if total_size else 100
-                                        )
-
-                                        print(
-                                            f"Extraction progress: "
-                                            f"{progress:.1f}% "
-                                            f"({extracted_size / (1024**3):.2f} GB)"
-                                        )
-
-                                        last_logged = extracted_size
-
-                if not csv_file.exists():
-                    raise FileNotFoundError(
-                        f"Expected CSV not found: {csv_file.name}"
-                    )
-
-                print(f"Extraction completed: {csv_file.name}")
-
-                # Delete ZIP after successful extraction
-                file_path.unlink()
-
-                print(f"Deleted ZIP: {filename}")
-
-        except HTTPError as error:
-            print(
-                f"Download failed: HTTP {error.code} for {url}"
+            filename = (
+                f"{SYMBOL}-{INTERVAL}-{day}.zip"
             )
-            raise
 
-        # Move to next month
-        current_month = current_month.add(months=1)
+            csv_filename = (
+                f"{SYMBOL}-{INTERVAL}-{day}.csv"
+            )
 
-    print("Historical extraction completed successfully.")
+            url = DAILY_URL + filename
+
+            print(f"\nProcessing daily archive: {day}")
+
+            download_archive(
+                url,
+                filename,
+                csv_filename
+            )
+
+            current_day = current_day.add(days=1)
+
+    elif end_date >= current_month_start:
+
+        print(
+            "No completed daily archives available "
+            "within the requested date range."
+        )
+
+    print("\nHistorical extraction completed successfully.")
 
 
 with DAG(
-    dag_id="download_binance_btcusdt_monthly",
-    description="Download and extract monthly BTCUSDT 1-second historical archives",
+    dag_id="download_binance_btcusdt_historical",
+    description=(
+        "Download monthly historical and daily current-month "
+        "BTCUSDT 1-second archives"
+    ),
     start_date=pendulum.datetime(2026, 1, 1, tz="UTC"),
-    schedule=None,
+    schedule=timedelta(minutes=1),
     catchup=False,
     max_active_runs=1,
     default_args={
@@ -211,15 +286,15 @@ with DAG(
             format="date",
         ),
         "end_date": Param(
-            "2026-09-30",
+            pendulum.now("UTC").to_date_string(),
             type="string",
             format="date",
         ),
     },
-    tags=["bitcoin", "binance", "backfill"],
+    tags=["bitcoin", "binance", "historical", "backfill"],
 ) as dag:
 
     download_task = PythonOperator(
-        task_id="download_monthly_zip",
+        task_id="download_historical_archives",
         python_callable=download_data,
     )
