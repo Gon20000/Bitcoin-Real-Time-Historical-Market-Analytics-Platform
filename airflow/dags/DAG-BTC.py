@@ -1,8 +1,6 @@
-
 from datetime import timedelta
 from pathlib import Path
 from urllib.request import urlopen
-from urllib.error import HTTPError
 import hashlib
 import zipfile
 
@@ -18,13 +16,11 @@ SYMBOL = "BTCUSDT"
 INTERVAL = "1s"
 
 MONTHLY_URL = (
-    "https://data.binance.vision/data/spot/monthly/"
-    f"klines/{SYMBOL}/{INTERVAL}/"
+    "https://data.binance.vision/data/spot/monthly/" f"klines/{SYMBOL}/{INTERVAL}/"
 )
 
 DAILY_URL = (
-    "https://data.binance.vision/data/spot/daily/"
-    f"klines/{SYMBOL}/{INTERVAL}/"
+    "https://data.binance.vision/data/spot/daily/" f"klines/{SYMBOL}/{INTERVAL}/"
 )
 
 CHUNK_SIZE = 1024 * 1024
@@ -32,13 +28,11 @@ LOG_INTERVAL = 100 * 1024 * 1024
 
 
 def download_archive(url, filename, csv_filename):
-
     file_path = DATA_DIR / filename
     csv_file = DATA_DIR / csv_filename
 
     # Skip existing CSV files
     if csv_file.exists():
-
         print(f"Already extracted: {csv_filename}")
 
         if file_path.exists():
@@ -49,7 +43,6 @@ def download_archive(url, filename, csv_filename):
 
     # Download archive if it doesn't exist
     if not file_path.exists():
-
         print(f"Downloading: {filename}")
 
         # Download checksum
@@ -62,7 +55,6 @@ def download_archive(url, filename, csv_filename):
             # Download to temporary file
             with urlopen(url, timeout=120) as response:
                 with temp_path.open("wb") as output:
-
                     while chunk := response.read(CHUNK_SIZE):
                         output.write(chunk)
 
@@ -76,9 +68,7 @@ def download_archive(url, filename, csv_filename):
             actual_hash = sha256.hexdigest()
 
             if actual_hash.lower() != expected_hash.lower():
-                raise ValueError(
-                    f"Checksum mismatch: {filename}"
-                )
+                raise ValueError(f"Checksum mismatch: {filename}")
 
             temp_path.replace(file_path)
 
@@ -92,9 +82,7 @@ def download_archive(url, filename, csv_filename):
     print(f"Starting extraction: {filename}")
 
     with zipfile.ZipFile(file_path, "r") as archive:
-
         for member in archive.infolist():
-
             if member.is_dir():
                 continue
 
@@ -106,9 +94,7 @@ def download_archive(url, filename, csv_filename):
 
             with archive.open(member) as source:
                 with target_path.open("wb") as target:
-
                     while chunk := source.read(CHUNK_SIZE):
-
                         target.write(chunk)
                         extracted_size += len(chunk)
 
@@ -116,10 +102,8 @@ def download_archive(url, filename, csv_filename):
                             extracted_size - last_logged >= LOG_INTERVAL
                             or extracted_size == total_size
                         ):
-
                             progress = (
-                                extracted_size / total_size * 100
-                                if total_size else 100
+                                extracted_size / total_size * 100 if total_size else 100
                             )
 
                             print(
@@ -131,9 +115,7 @@ def download_archive(url, filename, csv_filename):
                             last_logged = extracted_size
 
     if not csv_file.exists():
-        raise FileNotFoundError(
-            f"Expected CSV not found: {csv_filename}"
-        )
+        raise FileNotFoundError(f"Expected CSV not found: {csv_filename}")
 
     print(f"Extraction completed: {csv_filename}")
 
@@ -144,17 +126,12 @@ def download_archive(url, filename, csv_filename):
 
 
 def download_data():
-
     context = get_current_context()
     params = context["params"]
 
-    start_date = pendulum.from_format(
-        params["start_date"], "YYYY-MM-DD", tz="UTC"
-    )
+    start_date = pendulum.from_format(params["start_date"], "YYYY-MM-DD", tz="UTC")
 
-    end_date = pendulum.from_format(
-        params["end_date"], "YYYY-MM-DD", tz="UTC"
-    )
+    end_date = pendulum.from_format(params["end_date"], "YYYY-MM-DD", tz="UTC")
 
     if start_date > end_date:
         raise ValueError("start_date cannot be after end_date")
@@ -178,38 +155,24 @@ def download_data():
     # ------------------------------------------------
 
     if start_date < current_month_start:
-
-        monthly_end = min(
-            end_date,
-            current_month_start.subtract(days=1)
-        )
+        monthly_end = min(end_date, current_month_start.subtract(days=1))
 
         if start_date <= monthly_end:
-
             current_month = start_date.start_of("month")
             last_month = monthly_end.start_of("month")
 
             while current_month <= last_month:
-
                 month = current_month.format("YYYY-MM")
 
-                filename = (
-                    f"{SYMBOL}-{INTERVAL}-{month}.zip"
-                )
+                filename = f"{SYMBOL}-{INTERVAL}-{month}.zip"
 
-                csv_filename = (
-                    f"{SYMBOL}-{INTERVAL}-{month}.csv"
-                )
+                csv_filename = f"{SYMBOL}-{INTERVAL}-{month}.csv"
 
                 url = MONTHLY_URL + filename
 
                 print(f"\nProcessing monthly archive: {month}")
 
-                download_archive(
-                    url,
-                    filename,
-                    csv_filename
-                )
+                download_archive(url, filename, csv_filename)
 
                 current_month = current_month.add(months=1)
 
@@ -217,49 +180,31 @@ def download_data():
     # 2. Download current month as daily archives
     # ------------------------------------------------
 
-    daily_start = max(
-        start_date,
-        current_month_start
-    )
+    daily_start = max(start_date, current_month_start)
 
-    daily_end = min(
-        end_date,
-        yesterday
-    )
+    daily_end = min(end_date, yesterday)
 
     if daily_start <= daily_end:
-
         current_day = daily_start
 
         while current_day <= daily_end:
-
             day = current_day.format("YYYY-MM-DD")
 
-            filename = (
-                f"{SYMBOL}-{INTERVAL}-{day}.zip"
-            )
+            filename = f"{SYMBOL}-{INTERVAL}-{day}.zip"
 
-            csv_filename = (
-                f"{SYMBOL}-{INTERVAL}-{day}.csv"
-            )
+            csv_filename = f"{SYMBOL}-{INTERVAL}-{day}.csv"
 
             url = DAILY_URL + filename
 
             print(f"\nProcessing daily archive: {day}")
 
-            download_archive(
-                url,
-                filename,
-                csv_filename
-            )
+            download_archive(url, filename, csv_filename)
 
             current_day = current_day.add(days=1)
 
     elif end_date >= current_month_start:
-
         print(
-            "No completed daily archives available "
-            "within the requested date range."
+            "No completed daily archives available " "within the requested date range."
         )
 
     print("\nHistorical extraction completed successfully.")
@@ -293,7 +238,6 @@ with DAG(
     },
     tags=["bitcoin", "binance", "historical", "backfill"],
 ) as dag:
-
     download_task = PythonOperator(
         task_id="download_historical_archives",
         python_callable=download_data,
