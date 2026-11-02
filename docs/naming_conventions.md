@@ -20,7 +20,7 @@ Data engines (Trino, Spark, and our future Synapse migration) handle casing diff
 *   **Surrogate & Foreign Keys:** Always suffix with `_key` (e.g., `date_key`, `market_regime_key`).
 *   **Timestamps:** Suffix with `_time`. Must be converted to UTC.
     *   *Example:* `open_time`, `close_time`
-*   **Dates (Calendar Day):** Suffix with `_date`.
+*   **Dates (Calendar Day):** Prefix with `date_`.
     *   *Example:* `date_utc`, `date_eg`
 *   **Booleans & Flags:** Prefix with `is_` or suffix with `_flag`.
     *   *Example:* `is_candle_closed`, `is_weekend`, `extreme_wick_flag`

@@ -1,49 +1,3 @@
-# Bronze Layer: Batch (Historical CSV) Data Dictionary
-
-| table_name                    | column_name            | data_type   | business_definition_and_rules                                                                                               |
-|:------------------------------|:-----------------------|:------------|:----------------------------------------------------------------------------------------------------------------------------|
-| raw_binance_klines_historical | open_time              | BIGINT      | Candle open time in 16-digit microsecond UNIX epoch (e.g., 1792540815000000). Needs division by 1e6 for Gold UTC alignment. |
-| raw_binance_klines_historical | open_price             | VARCHAR     | First traded price within the 1-second window. Kept as string to prevent float degradation before Silver.                   |
-| raw_binance_klines_historical | high_price             | VARCHAR     | Highest traded price within the 1-second window.                                                                            |
-| raw_binance_klines_historical | low_price              | VARCHAR     | Lowest traded price within the 1-second window.                                                                             |
-| raw_binance_klines_historical | close_price            | VARCHAR     | Last traded price within the 1-second window.                                                                               |
-| raw_binance_klines_historical | base_asset_volume      | VARCHAR     | Total volume of Bitcoin (BTC) traded.                                                                                       |
-| raw_binance_klines_historical | close_time             | BIGINT      | Candle close time in 16-digit microsecond UNIX epoch.                                                                       |
-| raw_binance_klines_historical | quote_asset_volume     | VARCHAR     | Total volume in USDT traded.                                                                                                |
-| raw_binance_klines_historical | number_of_trades       | BIGINT      | Total count of individual trade executions.                                                                                 |
-| raw_binance_klines_historical | taker_buy_base_volume  | VARCHAR     | Volume of BTC purchased via aggressive market buy orders.                                                                   |
-| raw_binance_klines_historical | taker_buy_quote_volume | VARCHAR     | Volume of USDT spent via aggressive market buy orders.                                                                      |
-| raw_binance_klines_historical | ignore                 | VARCHAR     | Legacy field from Binance API. Maintained for structural parity with Silver layer before removal in Gold.                   |
-
----
-
-# Bronze Layer: Streaming (Live WebSocket) Data Dictionary
-
-| table_name                | column_name   | data_type   | business_definition_and_rules                                                                     |
-|:--------------------------|:--------------|:------------|:--------------------------------------------------------------------------------------------------|
-| raw_binance_klines_stream | e             | VARCHAR     | Event type (always 'kline').                                                                      |
-| raw_binance_klines_stream | E             | BIGINT      | Event time in 13-digit millisecond UNIX epoch.                                                    |
-| raw_binance_klines_stream | s             | VARCHAR     | Trading symbol (e.g., 'BTCUSDT'). Used as Kafka partition key.                                    |
-| raw_binance_klines_stream | k.t           | BIGINT      | Kline open time in 13-digit millisecond UNIX epoch. Needs division by 1e3 for Gold UTC alignment. |
-| raw_binance_klines_stream | k.T           | BIGINT      | Kline close time in 13-digit millisecond UNIX epoch.                                              |
-| raw_binance_klines_stream | k.s           | VARCHAR     | Trading symbol (duplicate inside 'k' object).                                                     |
-| raw_binance_klines_stream | k.i           | VARCHAR     | Interval (always '1s').                                                                           |
-| raw_binance_klines_stream | k.f           | BIGINT      | First trade ID within the candle.                                                                 |
-| raw_binance_klines_stream | k.L           | BIGINT      | Last trade ID within the candle.                                                                  |
-| raw_binance_klines_stream | k.o           | VARCHAR     | Open price as string.                                                                             |
-| raw_binance_klines_stream | k.c           | VARCHAR     | Close price as string.                                                                            |
-| raw_binance_klines_stream | k.h           | VARCHAR     | High price as string.                                                                             |
-| raw_binance_klines_stream | k.l           | VARCHAR     | Low price as string.                                                                              |
-| raw_binance_klines_stream | k.v           | VARCHAR     | Base asset volume (BTC).                                                                          |
-| raw_binance_klines_stream | k.n           | BIGINT      | Number of trades.                                                                                 |
-| raw_binance_klines_stream | k.x           | BOOLEAN     | CRITICAL: Is this kline closed? PySpark must filter 'true' for idempotency.                       |
-| raw_binance_klines_stream | k.q           | VARCHAR     | Quote asset volume (USDT).                                                                        |
-| raw_binance_klines_stream | k.V           | VARCHAR     | Taker buy base asset volume.                                                                      |
-| raw_binance_klines_stream | k.Q           | VARCHAR     | Taker buy quote asset volume.                                                                     |
-| raw_binance_klines_stream | k.B           | VARCHAR     | Ignore (legacy parameter from Binance API).                                                       |
-
----
-
 # Gold Layer Data Dictionary
 
 ## Overview
@@ -90,11 +44,11 @@ The Gold Layer is the business-level data representation, structured to support 
 | Column Name          | Data Type     | Description                                                                                   |
 |----------------------|---------------|-----------------------------------------------------------------------------------------------|
 | market_regime_key    | INT           | Surrogate key uniquely identifying each market regime combination in the dimension table.     |
-| rsi_regime           | NVARCHAR(50)  | The classification of market momentum based on RSI (e.g., 'Bullish', 'Bearish', 'Overbought').|
-| imbalance_regime     | NVARCHAR(50)  | The classification of order flow imbalance (e.g., 'Heavy Buying', 'Moderate Selling', 'Neutral'). |
-| volatility_regime    | NVARCHAR(50)  | The classification of market volatility (e.g., 'Extreme', 'High', 'Moderate', 'Low / Squeeze'). |
+| rsi_regime           | NVARCHAR(50)  | The classification of market momentum based on RSI: Overbought (rsi >= 70), Bullish (55 < rsi < 70), Neutral (45 <= rsi <= 55), Bearish (30 < rsi < 45), Oversold (rsi <= 30). |
+| imbalance_regime     | NVARCHAR(50)  | Categorization of order flow imbalance ratio into defined intervals: Heavy Buying (imbalance > +0.50), Moderate Buying (+0.15 < imbalance <= +0.50), Neutral (-0.15 <= imbalance <= +0.15), Moderate Selling (-0.50 <= imbalance < -0.15), Heavy Selling (imbalance < -0.50). |
+| volatility_regime    | NVARCHAR(50)  | The classification of market volatility: Extreme (vol > 0.015), High (vol > 0.008), Moderate (vol > 0.003), Low / Squeeze (vol <= 0.003). |
 | spread_category      | NVARCHAR(50)  | The category of the candlestick price spread (e.g., 'Wide', 'Normal', 'Compressed').         |
-| is_volatility_spike  | BOOLEAN       | Indicates whether an abnormal volatility spike occurred (e.g., 'TRUE', 'FALSE').              |
+| is_volatility_spike  | BOOLEAN       | Indicates whether an abnormal volatility spike occurred (realized_vol_60s > 2.5 * MA(vol_60s, 300s)). |
 | extreme_wick_flag    | BOOLEAN       | Indicates whether the candle has an extreme noise wick requiring cleaning (e.g., 'TRUE', 'FALSE'). |
 
 ---
