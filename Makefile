@@ -1,4 +1,5 @@
-.PHONY: help init build up-full up-stream up-orch up-analytics down logs clean \
+Makefile
+```.PHONY: help init build up-full up-stream up-orch up-analytics down logs clean \
         spark-batch dbt-shell dbt-run dbt-test test lint
 
 # Default target
