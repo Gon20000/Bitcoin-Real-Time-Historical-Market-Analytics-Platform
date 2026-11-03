@@ -12,15 +12,15 @@ Data engines (Trino, Spark, and our future Synapse migration) handle casing diff
 *   **Silver (Staging/Cleaned):** Prefix with `stg_`.
     *   *Format:* `stg_<source>_<entity>_<grain>`
     *   *Example:* `stg_binance_klines_1s`
-*   **Gold (Facts & Dimensions):** Prefix with `fct_` (for time-series facts) or `dim_` (for descriptive dimensions).
-    *   *Format:* `fct_<domain>_<entity>_<grain>` OR `dim_<entity>`
-    *   *Example:* `fct_btc_klines_1s`, `dim_market_regime`
+*   **Gold (Facts & Dimensions):** Prefix with `fact_` (for time-series facts) or `dim_` (for descriptive dimensions).
+    *   *Format:* `fact_<domain>_<entity>_<grain>` OR `dim_<entity>`
+    *   *Example:* `fact_btc_klines_1s`, `dim_market_regime`
 
 ### Columns & Fields
 *   **Surrogate & Foreign Keys:** Always suffix with `_key` (e.g., `date_key`, `market_regime_key`).
 *   **Timestamps:** Suffix with `_time`. Must be converted to UTC.
     *   *Example:* `open_time`, `close_time`
-*   **Dates (Calendar Day):** Suffix with `_date`.
+*   **Dates (Calendar Day):** Prefix with `date_`.
     *   *Example:* `date_utc`, `date_eg`
 *   **Booleans & Flags:** Prefix with `is_` or suffix with `_flag`.
     *   *Example:* `is_candle_closed`, `is_weekend`, `extreme_wick_flag`
