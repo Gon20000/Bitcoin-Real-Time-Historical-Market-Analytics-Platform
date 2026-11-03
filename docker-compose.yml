@@ -21,8 +21,8 @@ x-airflow-common: &airflow-common
     - ./airflow/logs:/opt/airflow/logs
     - ./dbt-transformations:/opt/airflow/dbt-transformations
     - ./spark-jobs:/opt/airflow/spark-jobs
-    - ./data:/opt/bitnami/spark/data
-    - ./data/checkpoints:/opt/bitnami/spark/checkpoints
+    - ./data:/opt/spark/data
+    - ./data/checkpoints:/opt/spark/checkpoints
   depends_on:
     postgres:
       condition: service_healthy
@@ -30,47 +30,50 @@ x-airflow-common: &airflow-common
     - btc-analytics-net
 
 x-spark-common: &spark-common
-  image: bitnami/spark:3.5.0
+  image: apache/spark:3.5.0
   env_file:
     - .env
   volumes:
-    - ./spark-jobs:/opt/bitnami/spark/jobs
-    - ./data:/opt/bitnami/spark/data
-    - ./data/checkpoints:/opt/bitnami/spark/checkpoints
+    - ./spark-jobs:/opt/spark/jobs
+    - ./data:/opt/spark/data
   networks:
     - btc-analytics-net
 
 services:
-
-  # ----------------------------------------------------------------------------
+  # ---------------------------------------------------------------------------
   # 1. SPEED LAYER (Kafka KRaft Broker & Binance WS Producer)
-  # ----------------------------------------------------------------------------
+  # ---------------------------------------------------------------------------
   kafka:
-    image: bitnami/kafka:3.7.0
+    image: apache/kafka:3.7.0
     container_name: btc-kafka-broker
     profiles: ["streaming", "full-stack"]
     ports:
       - "9092:9092"
     environment:
       # KRaft Mode Configuration (No ZooKeeper)
-      - KAFKA_CFG_NODE_ID=1
-      - KAFKA_CFG_PROCESS_ROLES=broker,controller
-      - KAFKA_CFG_CONTROLLER_LISTENER_NAMES=CONTROLLER
-      - KAFKA_CFG_CONTROLLER_QUORUM_VOTERS=1@kafka:9093
+      - KAFKA_NODE_ID=1
+      - KAFKA_PROCESS_ROLES=broker,controller
+      - KAFKA_CONTROLLER_LISTENER_NAMES=CONTROLLER
+      - KAFKA_CONTROLLER_QUORUM_VOTERS=1@kafka:9093
+      # Cluster ID (Must be base64-encoded, exactly 22 chars for official image KRaft formatting)
+      - CLUSTER_ID=${KAFKA_CLUSTER_ID:-yv_HDxg2TReKZNvB_cDI7A}
       # Listeners (Internal Docker network on 29092, Host machine on 9092)
-      - KAFKA_CFG_LISTENERS=PLAINTEXT://:29092,CONTROLLER://:9093,PLAINTEXT_HOST://:9092
-      - KAFKA_CFG_ADVERTISED_LISTENERS=PLAINTEXT://kafka:29092,PLAINTEXT_HOST://localhost:9092
-      - KAFKA_CFG_LISTENER_SECURITY_PROTOCOL_MAP=CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT,PLAINTEXT_HOST:PLAINTEXT
-      - KAFKA_CFG_INTER_BROKER_LISTENER_NAME=PLAINTEXT
+      - KAFKA_LISTENERS=PLAINTEXT://0.0.0.0:29092,CONTROLLER://0.0.0.0:9093,PLAINTEXT_HOST://0.0.0.0:9092
+      - KAFKA_ADVERTISED_LISTENERS=PLAINTEXT://kafka:29092,PLAINTEXT_HOST://localhost:9092
+      - KAFKA_LISTENER_SECURITY_PROTOCOL_MAP=CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT,PLAINTEXT_HOST:PLAINTEXT
+      - KAFKA_INTER_BROKER_LISTENER_NAME=PLAINTEXT
       # Topic & Retention Specifications (3 Partitions, 24-Hour Retention)
-      - KAFKA_CFG_NUM_PARTITIONS=3
-      - KAFKA_CFG_LOG_RETENTION_HOURS=24
-      - KAFKA_CFG_AUTO_CREATE_TOPICS_ENABLE=true
-      - KAFKA_KRAFT_CLUSTER_ID=${KAFKA_CLUSTER_ID:-btc-kraft-cluster-v1}
+      - KAFKA_NUM_PARTITIONS=3
+      - KAFKA_LOG_RETENTION_HOURS=24
+      - KAFKA_AUTO_CREATE_TOPICS_ENABLE=true
+      - KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR=1
+      - KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR=1
+      - KAFKA_TRANSACTION_STATE_LOG_MIN_ISR=1
     volumes:
-      - kafka_data:/bitnami/kafka
+      # Official ASF image uses /var/lib/kafka/data instead of /bitnami/kafka
+      - kafka_data:/var/lib/kafka/data
     healthcheck:
-      test: ["CMD-SHELL", "/opt/bitnami/kafka/bin/kafka-topics.sh --bootstrap-server localhost:29092 --list"]
+      test: ["CMD", "/opt/kafka/bin/kafka-topics.sh", "--bootstrap-server", "localhost:29092", "--list"]
       interval: 10s
       timeout: 5s
       retries: 5
@@ -98,22 +101,23 @@ services:
     networks:
       - btc-analytics-net
 
-  # ----------------------------------------------------------------------------
+  # ---------------------------------------------------------------------------
   # 2. COMPUTE LAYER (PySpark 3.5 Cluster, Structured Streaming & Batch)
-  # ----------------------------------------------------------------------------
+  # ---------------------------------------------------------------------------
   spark-master:
     <<: *spark-common
     container_name: btc-spark-master
     profiles: ["streaming", "batch", "orchestration", "full-stack"]
+    user: root
+    command: /opt/spark/bin/spark-class org.apache.spark.deploy.master.Master
     environment:
-      - SPARK_MODE=master
       - SPARK_RPC_AUTHENTICATION_ENABLED=no
       - SPARK_RPC_ENCRYPTION_ENABLED=no
     ports:
-      - "8081:8080" # Spark Master Web UI
-      - "7077:7077" # Spark Master RPC Port
+      - "8081:8080"  # Spark Master Web UI
+      - "7077:7077"  # Spark Master RPC Port
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8080"]
+      test: ["CMD-SHELL", "grep -qi ':1F90' /proc/net/tcp /proc/net/tcp6"]
       interval: 10s
       timeout: 5s
       retries: 5
@@ -122,9 +126,9 @@ services:
     <<: *spark-common
     container_name: btc-spark-worker
     profiles: ["streaming", "batch", "orchestration", "full-stack"]
+    user: root
+    command: /opt/spark/bin/spark-class org.apache.spark.deploy.worker.Worker spark://spark-master:7077
     environment:
-      - SPARK_MODE=worker
-      - SPARK_MASTER_URL=spark://spark-master:7077
       - SPARK_WORKER_MEMORY=${SPARK_WORKER_MEMORY:-4G}
       - SPARK_WORKER_CORES=${SPARK_WORKER_CORES:-2}
     depends_on:
@@ -135,14 +139,15 @@ services:
     <<: *spark-common
     container_name: btc-spark-streaming
     profiles: ["streaming", "full-stack"]
+    user: root
     command: >
-      /opt/bitnami/spark/bin/spark-submit
+      /opt/spark/bin/spark-submit
       --master spark://spark-master:7077
       --packages org.apache.spark:spark-sql-kafka-0-10_2.12:3.5.0,io.delta:delta-spark_2.12:3.1.0
       --conf "spark.sql.extensions=io.delta.sql.DeltaSparkSessionExtension"
       --conf "spark.sql.catalog.spark_catalog=org.apache.spark.sql.delta.catalog.DeltaCatalog"
       --conf "spark.sql.session.timeZone=UTC"
-      /opt/bitnami/spark/jobs/stream_bronze_to_silver.py
+      /opt/spark/jobs/stream_bronze_to_silver.py
     depends_on:
       kafka:
         condition: service_healthy
@@ -153,22 +158,23 @@ services:
   spark-batch-job:
     <<: *spark-common
     container_name: btc-spark-batch-manual
-    profiles: ["batch"] # On-demand CLI profile; scheduled runs are triggered by Airflow
+    profiles: ["batch"]  # On-demand CLI profile; scheduled runs are triggered by Airflow
+    user: root
     command: >
-      /opt/bitnami/spark/bin/spark-submit
+      /opt/spark/bin/spark-submit
       --master spark://spark-master:7077
       --packages io.delta:delta-spark_2.12:3.1.0
       --conf "spark.sql.extensions=io.delta.sql.DeltaSparkSessionExtension"
       --conf "spark.sql.catalog.spark_catalog=org.apache.spark.sql.delta.catalog.DeltaCatalog"
       --conf "spark.sql.session.timeZone=UTC"
-      /opt/bitnami/spark/jobs/batch_historical_ingest.py
+      /opt/spark/jobs/batch_historical_ingest.py
     depends_on:
       spark-master:
         condition: service_healthy
 
-  # ----------------------------------------------------------------------------
+  # ---------------------------------------------------------------------------
   # 3. ORCHESTRATION LAYER (Postgres 13 + Airflow 2.8.1 + Astronomer Cosmos)
-  # ----------------------------------------------------------------------------
+  # ---------------------------------------------------------------------------
   postgres:
     image: postgres:13
     container_name: btc-airflow-postgres
@@ -178,7 +184,7 @@ services:
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
       POSTGRES_DB: ${POSTGRES_DB}
     ports:
-      - "5432:5432"
+      - "5433:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
     healthcheck:
@@ -209,7 +215,7 @@ services:
     profiles: ["orchestration", "full-stack"]
     command: webserver
     ports:
-      - "8080:8080"
+      - "8085:8080"
     healthcheck:
       test: ["CMD", "curl", "--fail", "http://localhost:8080/health"]
       interval: 30s
@@ -239,20 +245,20 @@ services:
         condition: service_completed_successfully
     restart: unless-stopped
 
-  # ----------------------------------------------------------------------------
+  # ---------------------------------------------------------------------------
   # 4. QUERY & SEMANTIC LAYER (Trino + dbt Core / MetricFlow Workspace)
-  # ----------------------------------------------------------------------------
+  # ---------------------------------------------------------------------------
   trino:
     image: trinodb/trino:440
     container_name: btc-trino-engine
     profiles: ["analytics", "orchestration", "full-stack"]
     ports:
-      - "8082:8080" # Mapped to 8082 on host to avoid conflict with Airflow (8080) and Spark (8081)
+      - "8082:8080"  # Mapped to 8082 on host to avoid conflict with Airflow (8085) and Spark (8081)
     volumes:
-      - ./data:/opt/bitnami/spark/data
+      - ./data:/opt/spark/data
       - ./trino/etc/catalog:/etc/trino/catalog
     healthcheck:
-      test: ["CMD-SHELL", "curl -f http://localhost:8080/v1/info || exit 1"]
+      test: ["CMD", "trino", "--execute", "SELECT 1"]
       interval: 10s
       timeout: 5s
       retries: 5
@@ -275,7 +281,7 @@ services:
       - TRINO_PORT=8080
     volumes:
       - ./dbt-transformations:/opt/airflow/dbt-transformations
-      - ./data:/opt/bitnami/spark/data
+      - ./data:/opt/spark/data
     depends_on:
       trino:
         condition: service_healthy
