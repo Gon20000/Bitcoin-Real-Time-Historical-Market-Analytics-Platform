@@ -12,13 +12,13 @@ import sys
 # PySpark imports:
 # DataFrame: Used for type hinting DataFrame inputs and outputs
 # SparkSession: The unified entry point for reading, writing, and SQL execution
-from pyspark.sql import DataFrame, SparkSession
+from pyspark.sql import DataFrame, SparkSession  # pyright: ignore[reportMissingImports]
 
 # F: Provides built-in functions (when, col, year, month, to_timestamp, etc.)
-from pyspark.sql import functions as F
+from pyspark.sql import functions as F  # pyright: ignore[reportMissingImports]
 
 # T: Provides explicit data types (StructType, LongType, DecimalType, etc.)
-from pyspark.sql import types as T
+from pyspark.sql import types as T  # pyright: ignore[reportMissingImports]
 
 
 def get_spark_session() -> SparkSession:
