@@ -122,7 +122,7 @@ def transform_to_silver(raw_df: DataFrame) -> DataFrame:
         )
         # Convert integer seconds to formal UTC TimestampType
         .withColumn("open_time", F.to_timestamp(F.from_unixtime("open_time_sec")))
-        .withColumn("close_time", F.to_timestamp(F.from_unixtime("close_time_sec")))
+        .withColumn("close_time", F.to_timestamp(F.from_unixtime(F.col("close_time_sec") + 1)))
     )
 
     # 2. Cast all price and volume attributes to DECIMAL(18, 8) & Rename for dbt parity
@@ -157,7 +157,7 @@ def transform_to_silver(raw_df: DataFrame) -> DataFrame:
     silver_df = (
         silver_df.filter(F.col("open_time").isNotNull() & (F.col("open_price") > 0))
         .dropDuplicates(["open_time"])
-        .sortWithinPartitions("open_time")
+        .orderBy("open_time")
     )
 
     # 5. Enforce exact column order as specified in the Silver data contracts
