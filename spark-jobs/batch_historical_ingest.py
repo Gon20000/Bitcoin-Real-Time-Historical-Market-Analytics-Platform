@@ -8,9 +8,9 @@ and writes partitioned Delta Lake tables into Silver layer.
 import os
 import sys
 
-from pyspark.sql import DataFrame, SparkSession
-from pyspark.sql import functions as F
-from pyspark.sql import types as T
+from pyspark.sql import DataFrame, SparkSession  # pyright: ignore[reportMissingImports]
+from pyspark.sql import functions as F  # pyright: ignore[reportMissingImports]
+from pyspark.sql import types as T  # pyright: ignore[reportMissingImports]
 
 
 def get_spark_session() -> SparkSession:
