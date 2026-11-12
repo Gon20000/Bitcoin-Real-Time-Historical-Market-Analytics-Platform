@@ -2,60 +2,38 @@
 
 Ingests raw Binance Vision historical CSV files,
 standardizes schema, timestamps, and precision,
-and saves partitioned Delta Lake tables into Silver layer.
+and writes partitioned Delta Lake tables into Silver layer.
 """
 
-# Standard library imports for OS operations and CLI arguments
 import os
 import sys
 
-# PySpark imports:
-# DataFrame: Used for type hinting DataFrame inputs and outputs
-# SparkSession: The unified entry point for reading, writing, and SQL execution
-from pyspark.sql import DataFrame, SparkSession  # pyright: ignore[reportMissingImports]
-
-# F: Provides built-in functions (when, col, year, month, to_timestamp, etc.)
-from pyspark.sql import functions as F  # pyright: ignore[reportMissingImports]
-
-# T: Provides explicit data types (StructType, LongType, DecimalType, etc.)
-from pyspark.sql import types as T  # pyright: ignore[reportMissingImports]
+from pyspark.sql import DataFrame, SparkSession
+from pyspark.sql import functions as F
+from pyspark.sql import types as T
 
 
 def get_spark_session() -> SparkSession:
-    """Initialize and configure a Delta Lake-enabled SparkSession in UTC.
-
-    Returns:
-        SparkSession: The configured SparkSession instance.
-    """
+    """Initialize and configure a Delta Lake-enabled SparkSession."""
     return (
-        SparkSession.builder
-        # Application name visible in the Spark Master Web UI (port 8081)
-        .appName("Binance_Historical_Batch_Ingest")
-        # 1. Enable Delta Lake specific SQL commands (e.g., MERGE, VACUUM, UPDATE)
+        SparkSession.builder.appName("Binance_Historical_Batch_Ingest")
         .config("spark.sql.extensions", "io.delta.sql.DeltaSparkSessionExtension")
-        # 2. Register Delta Lake as the default catalog manager
         .config(
             "spark.sql.catalog.spark_catalog",
             "org.apache.spark.sql.delta.catalog.DeltaCatalog",
         )
-        # 3. Dynamic overwrite: Overwrites only the touched partitions (year/month)
-        # instead of deleting the entire table when writing in overwrite mode
         .config("spark.sql.sources.partitionOverwriteMode", "dynamic")
-        # 4. Enforce strict UTC timezone to prevent local machine time-zone shifts
         .config("spark.sql.session.timeZone", "UTC")
-        # Build or retrieve the active SparkSession instance
+        .config(
+            "spark.sql.shuffle.partitions",
+            os.getenv("SPARK_SHUFFLE_PARTITIONS", "8"),
+        )
+        .config("spark.databricks.delta.optimizeWrite.enabled", "true")
         .getOrCreate()
     )
 
 
-# -----------------------------------------------------------------------------
-# 1. Raw Schema Contract for Historical Binance Vision CSVs (12 Columns)
-# -----------------------------------------------------------------------------
-# We enforce an explicit schema rather than using 'inferSchema=True'.
-# Benefits:
-# 1. Zero performance penalty (Spark doesn't scan the multi-GB dataset twice).
-# 2. Prevents header corruption (Binance Vision CSVs contain no header row).
-# 3. Prices and volumes are parsed as StringType to prevent automatic float coercion.
+# Raw Schema for Binance Vision 1s historical CSV files (no header row)
 RAW_CSV_SCHEMA = T.StructType(
     [
         T.StructField("open_time", T.LongType(), nullable=False),
@@ -73,28 +51,17 @@ RAW_CSV_SCHEMA = T.StructType(
     ]
 )
 
-# Default I/O paths matching Docker volume mounts (/opt/spark/data)
 DEFAULT_INPUT_DIR = os.getenv("INPUT_DIR", "/opt/spark/data/bronze/historical")
 DEFAULT_OUTPUT_DIR = os.getenv(
     "OUTPUT_DIR", "/opt/spark/data/silver/stg_binance_klines_1s"
 )
 
 
-# -----------------------------------------------------------------------------
-# 2. Data Cleaning and Transformation (Silver Layer Standardization)
-# -----------------------------------------------------------------------------
 def transform_to_silver(raw_df: DataFrame) -> DataFrame:
-    """Transform raw Binance klines to unified Silver schema specifications.
-
-    - Standardizes 16-digit (micro) and 13-digit (milli) timestamps to UTC seconds.
-    - Explicitly casts all price and volume attributes to DECIMAL(18, 8).
-    - Renames taker buy volumes with '_asset_' for Gold dbt/Trino parity.
-    - Adds is_candle_closed=True flag for batch-streaming structural alignment.
-    - Derives year and month columns for partition management.
-    """
+    """Standardize timestamps, types, validation, and partitions for Silver."""
     decimal_type = T.DecimalType(18, 8)
 
-    # 1. Standardize timestamps to 10-digit UTC seconds via integer division
+    # 1. Standardize 16-digit (micro) and 13-digit (milli) epochs to 10-digit UTC seconds
     cleaned_df = (
         raw_df.withColumn(
             "open_time_sec",
@@ -120,22 +87,25 @@ def transform_to_silver(raw_df: DataFrame) -> DataFrame:
             )
             .otherwise(F.col("close_time")),
         )
-        # Convert integer seconds to formal UTC TimestampType
         .withColumn("open_time", F.to_timestamp(F.from_unixtime("open_time_sec")))
-        .withColumn("close_time", F.to_timestamp(F.from_unixtime(F.col("close_time_sec") + 1)))
+        .withColumn(
+            "close_time",
+            F.to_timestamp(F.from_unixtime(F.col("close_time_sec") + 1)),
+        )
     )
 
-    # 2. Cast all price and volume attributes to DECIMAL(18, 8) & Rename for dbt parity
+    # 2. Enforce DECIMAL(18, 8) and align field names with Gold layer contracts
     silver_df = (
         cleaned_df.withColumn("open_price", F.col("open_price").cast(decimal_type))
         .withColumn("high_price", F.col("high_price").cast(decimal_type))
         .withColumn("low_price", F.col("low_price").cast(decimal_type))
         .withColumn("close_price", F.col("close_price").cast(decimal_type))
-        .withColumn("base_asset_volume", F.col("base_asset_volume").cast(decimal_type))
+        .withColumn(
+            "base_asset_volume", F.col("base_asset_volume").cast(decimal_type)
+        )
         .withColumn(
             "quote_asset_volume", F.col("quote_asset_volume").cast(decimal_type)
         )
-        # Add '_asset_' to match Gold Layer contracts exactly
         .withColumn(
             "taker_buy_base_asset_volume",
             F.col("taker_buy_base_volume").cast(decimal_type),
@@ -144,23 +114,30 @@ def transform_to_silver(raw_df: DataFrame) -> DataFrame:
             "taker_buy_quote_asset_volume",
             F.col("taker_buy_quote_volume").cast(decimal_type),
         )
-        # Add boolean flag for streaming/batch schema parity
         .withColumn("is_candle_closed", F.lit(True))
     )
 
-    # 3. Extract year and month columns for efficient Delta Lake partitioning
+    # 3. Derive partition columns
     silver_df = silver_df.withColumn("year", F.year("open_time")).withColumn(
         "month", F.month("open_time")
     )
 
-    # 4. Data cleaning: filter corrupted records, deduplicate on timestamp, and sort
-    silver_df = (
-        silver_df.filter(F.col("open_time").isNotNull() & (F.col("open_price") > 0))
-        .dropDuplicates(["open_time"])
-        .orderBy("open_time")
+    # 4. Rigorous data quality filtering, deduplication, and partition-local sorting
+    validation_filter = (
+        F.col("open_time").isNotNull()
+        & (F.col("open_price") > 0)
+        & (F.col("close_price") > 0)
+        & (F.col("high_price") >= F.col("low_price"))
+        & (F.col("base_asset_volume") >= 0)
     )
 
-    # 5. Enforce exact column order as specified in the Silver data contracts
+    silver_df = (
+        silver_df.filter(validation_filter)
+        .dropDuplicates(["open_time"])
+        .sortWithinPartitions("open_time")
+    )
+
+    # 5. Enforce explicit column order
     final_columns = [
         "open_time",
         "open_price",
@@ -182,15 +159,8 @@ def transform_to_silver(raw_df: DataFrame) -> DataFrame:
     return silver_df.select(final_columns)
 
 
-# -----------------------------------------------------------------------------
-# 3. Idempotent Delta Lake Persistence
-# -----------------------------------------------------------------------------
 def write_to_silver_delta(df: DataFrame, output_path: str) -> None:
-    """Write DataFrame as partitioned Delta Lake table with dynamic overwrite.
-
-    Dynamic overwrite mode replaces only matching (year, month) partitions
-    present in the current dataset, ensuring fully idempotent re-runs.
-    """
+    """Persist clean dataset to partitioned Delta Lake with dynamic overwrite."""
     (
         df.write.format("delta")
         .mode("overwrite")
@@ -200,12 +170,8 @@ def write_to_silver_delta(df: DataFrame, output_path: str) -> None:
     )
 
 
-# -----------------------------------------------------------------------------
-# 4. Pipeline Execution & Orchestration
-# -----------------------------------------------------------------------------
 def main() -> None:
-    """Execute the end-to-end historical batch ingestion pipeline."""
-    # Allow CLI path overrides or fall back to standard container defaults
+    """Execute single-pass historical batch ingestion pipeline."""
     input_path = sys.argv[1] if len(sys.argv) > 1 else DEFAULT_INPUT_DIR
     output_path = sys.argv[2] if len(sys.argv) > 2 else DEFAULT_OUTPUT_DIR
 
@@ -213,36 +179,30 @@ def main() -> None:
     print(f"[INFO] Input directory:  {input_path}")
     print(f"[INFO] Output directory: {output_path}")
 
-    spark = get_spark_session()
-    spark.sparkContext.setLogLevel("WARN")
+    spark = None
+    try:
+        spark = get_spark_session()
+        spark.sparkContext.setLogLevel("WARN")
 
-    # Read bulk historical CSV files using explicit schema
-    csv_wildcard = os.path.join(input_path, "*.csv")
-    print(f"[INFO] Loading CSV files from: {csv_wildcard}")
+        csv_wildcard = os.path.join(input_path, "*.csv")
+        print(f"[INFO] Reading historical CSV files from: {csv_wildcard}")
+        raw_df = spark.read.format("csv").schema(RAW_CSV_SCHEMA).load(csv_wildcard)
 
-    raw_df = spark.read.format("csv").schema(RAW_CSV_SCHEMA).load(csv_wildcard)
+        # Single-pass execution: transform and persist without intermediate actions
+        print("[INFO] Applying Silver transformations and persisting to Delta Lake...")
+        silver_df = transform_to_silver(raw_df)
+        write_to_silver_delta(silver_df, output_path)
 
-    total_records = raw_df.count()
-    print(f"[INFO] Successfully loaded {total_records:,} raw records from Bronze.")
+        print("[INFO] Batch ingestion and cleaning completed successfully! [DONE]")
 
-    if total_records == 0:
-        print("[WARN] No records found to process. Exiting.")
-        return
+    except Exception as e:
+        print(f"[ERROR] Pipeline execution failed: {e}", file=sys.stderr)
+        sys.exit(1)
 
-    # Clean and transform dataset to Silver specifications
-    print("[INFO] Applying Silver schema transformations...")
-    silver_df = transform_to_silver(raw_df)
-
-    # Preview sample records and schema for operational verification
-    print("[INFO] Transformed DataFrame preview:")
-    silver_df.show(3, truncate=False)
-    silver_df.printSchema()
-
-    # Save to Silver Delta Lake
-    print(f"[INFO] Persisting clean dataset to Silver Delta Lake: {output_path}...")
-    write_to_silver_delta(silver_df, output_path)
-
-    print("[INFO] Batch ingestion and cleaning completed successfully! [DONE]")
+    finally:
+        if spark is not None:
+            print("[INFO] Shutting down Spark session...")
+            spark.stop()
 
 
 if __name__ == "__main__":
