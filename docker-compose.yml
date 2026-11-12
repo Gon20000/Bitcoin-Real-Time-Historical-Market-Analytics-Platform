@@ -285,7 +285,7 @@ services:
     depends_on:
       trino:
         condition: service_healthy
-    command: tail -f /dev/null
+    command: bash -c "tail -f /dev/null"
     networks:
       - btc-analytics-net
 
