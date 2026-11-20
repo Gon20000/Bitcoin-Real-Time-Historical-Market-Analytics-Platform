@@ -20,7 +20,7 @@ The platform operates on a containerized, orchestrated stack ensuring reproducib
 
   * Database (Airflow Metadata only): PostgreSQL 13 (`postgres:13`).
 
-* **Message Broker:** Apache Kafka (`bitnami/kafka:3.7.0`).
+* **Message Broker:** Apache Kafka (`apache/kafka:3.7.0`).
 
   * Running in **KRaft mode** (bypassing ZooKeeper).
 
@@ -32,7 +32,7 @@ The platform operates on a containerized, orchestrated stack ensuring reproducib
 
   * Message Keys: Symbol (to strictly preserve chronological event order).
 
-* **Stream Processing:** PySpark Structured Streaming (`bitnami/spark:3.5.0` running Python 3.11 internally).
+* **Stream Processing:** PySpark Structured Streaming (`apache/spark:3.5.0` running Python 3.11 internally).
 
 ### Transformation & Semantic Layer
 
@@ -54,7 +54,7 @@ The platform operates on a containerized, orchestrated stack ensuring reproducib
 
 ### Speed Layer (Near Real-Time)
 
-* **Source:** Binance Live WebSocket API (`wss://fstream.binance.com/ws/btcusdt@kline_1s`).
+* **Source:** Binance Live WebSocket API (`wss://stream.binance.com:9443/stream`).
 
 * **Producer:** Custom Python WebSocket client with exponential backoff handling connection drops and pushing JSON payloads to Kafka.
 
@@ -90,7 +90,7 @@ The platform operates on a containerized, orchestrated stack ensuring reproducib
 
 * **Idempotency / The `k.x` Flag:** Binance WS sends continuous updates *during* a second. PySpark Structured Streaming must explicitly filter the live feed for `"x": true` (closed candles). This prevents partial-data duplicates and ensures perfect matching with static historical CSVs.
 
-* **State Management:** PySpark must mount a durable volume for checkpointing (`/opt/bitnami/spark/checkpoints`) to resume offsets safely after crashes.
+* **State Management:** PySpark must mount a durable volume for checkpointing (`/opt/spark/checkpoints`) to resume offsets safely after crashes.
 
 ### Gold Zone (Feature Engineering via dbt)
 
