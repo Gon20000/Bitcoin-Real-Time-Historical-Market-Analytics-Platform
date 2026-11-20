@@ -3,11 +3,10 @@ import json
 from unittest.mock import MagicMock
 
 import pytest
-from tenacity import stop_after_attempt, wait_none
 from confluent_kafka import Producer
-
 from producer import main as producer_module
 from producer.main import connect_to_binance, parse_kline_message
+from tenacity import stop_after_attempt, wait_none
 
 valid_kline_data = {
     "stream": "btcusdt@kline_1s",  # Stream name
@@ -44,11 +43,14 @@ def test_parse_valid_closed_kline():
     result = parse_kline_message(raw)
 
     assert result is not None
-    symbol, kline = result
+    symbol, payload = result
     assert symbol == "BTCUSDT"
-    assert kline["o"] == "59342.01000000"
-    assert kline["c"] == "59320.00000000"
-    assert kline["x"] is True
+    assert payload["e"] == "kline"
+    assert payload["E"] == 1795190799024132
+    assert payload["s"] == "BTCUSDT"
+    assert payload["k"]["o"] == "59342.01000000"
+    assert payload["k"]["c"] == "59320.00000000"
+    assert payload["k"]["x"] is True
 
 
 def test_parse_ignores_unclosed_kline():
@@ -108,7 +110,7 @@ def test_connect_to_binance_reconnects_after_failure(monkeypatch):
                 return next(self._messages)
             except StopIteration:
                 stop_event.set()
-                raise asyncio.TimeoutError()
+                raise TimeoutError()
 
     class FakeConnectContext:
         async def __aenter__(self):
@@ -122,7 +124,9 @@ def test_connect_to_binance_reconnects_after_failure(monkeypatch):
             return False
 
     monkeypatch.setattr(
-        producer_module.websockets, "connect", lambda _url: FakeConnectContext()
+        producer_module.websockets,
+        "connect",
+        lambda _url, **kwargs: FakeConnectContext(),
     )
 
     asyncio.run(connect_to_binance(mock_kafka_producer, stop_event))
@@ -131,3 +135,35 @@ def test_connect_to_binance_reconnects_after_failure(monkeypatch):
     mock_kafka_producer.produce.assert_called_once()
     call_kwargs = mock_kafka_producer.produce.call_args.kwargs
     assert call_kwargs["key"] == b"BTCUSDT"
+    published_payload = json.loads(call_kwargs["value"].decode("utf-8"))
+    assert published_payload["e"] == "kline"
+    assert published_payload["E"] == 1795190799024132
+    assert published_payload["s"] == "BTCUSDT"
+    assert published_payload["k"]["c"] == "59320.00000000"
+
+
+def test_produce_kline_applies_backpressure_until_accepted(monkeypatch):
+    async def fast_sleep(_seconds):
+        pass
+
+    monkeypatch.setattr(producer_module.asyncio, "sleep", fast_sleep)
+
+    mock_producer = MagicMock(spec=Producer)
+    # Fail 5 times (more than the old 3-retry cap), then succeed on attempt 6
+    mock_producer.produce.side_effect = [BufferError("full")] * 5 + [None]
+
+    stop_event = asyncio.Event()
+    payload = {
+        "e": "kline",
+        "E": 1700000000123456,
+        "s": "BTCUSDT",
+        "k": {"s": "BTCUSDT", "t": 1700000000000000, "c": "90000.00", "x": True},
+    }
+
+    asyncio.run(
+        producer_module.produce_kline(
+            mock_producer, "test-topic", "BTCUSDT", payload, stop_event
+        )
+    )
+
+    assert mock_producer.produce.call_count == 6

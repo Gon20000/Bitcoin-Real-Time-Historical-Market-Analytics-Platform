@@ -100,6 +100,7 @@ services:
     restart: unless-stopped
     networks:
       - btc-analytics-net
+    stop_grace_period: 30s  # Allow time for graceful shutdown and queue draining
 
   # ---------------------------------------------------------------------------
   # 2. COMPUTE LAYER (PySpark 3.5 Cluster, Structured Streaming & Batch)

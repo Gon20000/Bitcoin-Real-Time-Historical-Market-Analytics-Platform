@@ -19,15 +19,17 @@ Solution: Use an asyncio.Event to handle SIGTERM
 TODO: historical backfill: we should be able to backfill data that was lost due to downtime or connection issues.
 """
 
-import json
-import websockets
-from websockets.exceptions import ConnectionClosed
-from tenacity import retry, wait_random_exponential, before_sleep_log
 import asyncio
-import signal
-from confluent_kafka import Producer
+import json
 import logging
 import os
+import signal
+import sys
+
+import websockets
+from confluent_kafka import Producer
+from tenacity import before_sleep_log, retry, wait_random_exponential
+from websockets.exceptions import ConnectionClosed
 
 LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO").upper()
 KAFKA_BROKER = os.getenv("KAFKA_BOOTSTRAP_SERVERS", "localhost:9092")
@@ -56,34 +58,37 @@ async def produce_kline(
     producer: Producer,
     topic: str,
     symbol: str,
-    kline: dict,
+    payload: dict,
     stop_event: asyncio.Event,
-    max_retries: int = 3,
 ) -> None:
     key = symbol.encode("utf-8")
-    value = json.dumps(kline).encode("utf-8")
+    value = json.dumps(payload).encode("utf-8")
+    attempts = 0
 
-    for attempt in range(1, max_retries + 1):
+    while True:
         try:
-            producer.produce(
-                topic=topic, key=key, value=value, callback=kafka_delivery_report
-            )
+            producer.produce(topic=topic, key=key, value=value)
             producer.poll(0)
             return
         except BufferError:
-            logger.warning(
-                f"Producer queue full ({len(producer)} pending). "
-                f"Retrying ({attempt}/{max_retries})..."
-            )
-            if stop_event.is_set():
-                break
-            # Wait a bit before retrying to avoid busy waiting (in case of a full queue)
-            await asyncio.sleep(0.1)
+            attempts += 1
+            if attempts == 1 or attempts % 10 == 0:
+                logger.warning(
+                    f"Producer queue full ({len(producer)} pending). "
+                    f"Applying backpressure (attempt {attempts})..."
+                )
 
-    logger.error(
-        f"Dropped kline for {symbol} at open_time={kline.get('t')} "
-        f"after {max_retries} buffer retries."
-    )
+            # Poll the producer to handle delivery reports and free up space in the queue (skipped in the try)
+            producer.poll(0)
+            if stop_event.is_set():
+                logger.error(
+                    f"Shutdown interrupted queuing for {symbol} at "
+                    f"open_time={payload.get('k', {}).get('t')} while producer queue was full."
+                )
+                return
+
+            # Yields control back to the event loop so ping/pong messages can be processed and the queue can be drained
+            await asyncio.sleep(min(0.1 * attempts, 1))
 
 
 def parse_kline_message(raw_message: str) -> tuple[str, dict] | None:
@@ -105,13 +110,14 @@ def parse_kline_message(raw_message: str) -> tuple[str, dict] | None:
         logger.warning("Server shutdown message received. Attempting to reconnect...")
         raise ConnectionError("Server shutdown, reconnecting...")
 
-    # Safely get 'data', then 'k', defaulting to empty dicts if missing
-    kline = res.get("data", {}).get("k", {})
+    # Safely get 'data' (envelope), then 'k', defaulting to empty dicts if missing
+    data = res.get("data", {})
+    kline = data.get("k", {})
     if not kline.get("x", False):
         return None  # Ignore messages that are not final (x = False)
 
-    symbol = kline.get("s", "UNKNOWN")
-    return symbol, kline
+    symbol = data.get("s") or kline.get("s", "UNKNOWN")
+    return symbol, data
 
 
 async def receive_messages(
@@ -126,11 +132,10 @@ async def receive_messages(
             if parsed is None:
                 continue  # Skip if the message was not a valid kline
 
-            symbol, kline = parsed
-            await produce_kline(producer, KAFKA_TOPIC, symbol, kline, stop_event)
+            symbol, payload = parsed
+            await produce_kline(producer, KAFKA_TOPIC, symbol, payload, stop_event)
 
-            producer.poll(0)  # Trigger delivery report callbacks
-        except asyncio.TimeoutError:
+        except TimeoutError:
             logger.warning("Timeout waiting for message. Checking connection...")
             continue
         except ConnectionClosed as e:
@@ -146,8 +151,9 @@ async def receive_messages(
     before_sleep=before_sleep_log(logger, logging.WARNING),
 )
 async def connect_to_binance(producer: Producer, stop_event: asyncio.Event) -> None:
-    # connect to the stream and subscribe to the symbols
-    async with websockets.connect(STREAM_URL) as websocket:
+    # connect to the stream, subscribe to the symbols and
+    # increase max_queue for better handling of worst-case scenarios
+    async with websockets.connect(STREAM_URL, max_queue=1024) as websocket:
         subscribe_message = {
             "method": "SUBSCRIBE",
             "params": [f"{symbol.lower()}@kline_1s" for symbol in SYMBOLS],
@@ -165,10 +171,21 @@ async def main():
     # we use it to handle SIGTERM signals from Docker by setting the event when a SIGTERM is received, which will cause the loop to exit cleanly.
     stop_event = asyncio.Event()
     loop = asyncio.get_running_loop()
+
+    is_shutting_down = False
+    shutdown_delivery_failures = 0
+
+    def on_delivery(err, msg) -> None:
+        nonlocal shutdown_delivery_failures
+        if err is not None and is_shutting_down:
+            shutdown_delivery_failures += 1
+        kafka_delivery_report(err, msg)
+
     producer = Producer(
         {
             "bootstrap.servers": KAFKA_BROKER,
             "enable.idempotence": True,
+            "on_delivery": on_delivery,
         }
     )
 
@@ -184,19 +201,29 @@ async def main():
         # Register signal handlers to set the stop_event when a SIGINT or SIGTERM is received
         loop.add_signal_handler(sig, handle_shutdown)
 
+    shutdown_failed = False
     try:
         await stream_task
     except asyncio.CancelledError:
         logger.info("Streaming task cancelled cleanly.")
     finally:
+        is_shutting_down = True
         logger.info("Flushing remaining messages to Kafka...")
-        # Wait up to 10 seconds for messages to be delivered (also avoid kafka itself being down and never flushing)
-        remaining = producer.flush(10)
-        if remaining > 0:
-            logger.warning(f"{remaining} messages were not delivered before shutdown.")
+        # Flush the producer to ensure all messages are sent before shutdown
+        remaining = producer.flush()
+        if remaining > 0 or shutdown_delivery_failures > 0:
+            logger.error(
+                f"Shutdown failed to deliver all Kafka records "
+                f"(remaining={remaining}, failed={shutdown_delivery_failures})."
+            )
+            shutdown_failed = True
         else:
             logger.info("All messages delivered successfully.")
-        logger.info("Shutdown complete.")
+            logger.info("Shutdown complete.")
+
+    # putting it inside finally completely erases crashes from the try block.
+    if shutdown_failed:
+        sys.exit(1)
 
 
 if __name__ == "__main__":

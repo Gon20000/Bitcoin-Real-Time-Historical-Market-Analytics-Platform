@@ -82,9 +82,9 @@ The platform operates on a containerized, orchestrated stack ensuring reproducib
 
   * Open Time, Open Price, High Price, Low Price, Close Price, Base Asset Volume, Close Time, Quote Asset Volume, Number of Trades, Taker Buy Base, Taker Buy Quote, Ignore.
 
-* **Timestamps:** Converted to millisecond UTC Datetime.
+* **Timestamps:** Converted to UTC Datetime in seconds.
 
-  * *Constraint:* Historical CSVs use 16-digit microsecond UNIX (e.g., 1792540815000000); WS provides 13-digit milliseconds. Both must be explicitly standardized.
+  * *Constraint:* Both Historical CSVs and WS use 16-digit microsecond UNIX (e.g., 1792540815000000). Both must be cleaned.
 
 * **Data Type Precision (CRITICAL):** Prices and volumes are explicitly cast to `DECIMAL(18, 8)` to eliminate floating-point degradation. **No Python `float` or SQL `DOUBLE` allowed.**
 
