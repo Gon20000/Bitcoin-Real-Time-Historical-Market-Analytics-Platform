@@ -1,0 +1,159 @@
+version: 2
+
+semantic_models:
+  # =========================================================================
+  # 1. Fact Table Semantic Model (fct_btc_klines_1s)
+  # =========================================================================
+  - name: btc_klines_1s
+    model: ref('fct_btc_klines_1s')
+    description: "1-second Bitcoin klines fact table providing high-frequency trading metrics and financial indicators."
+
+    entities:
+      - name: candle
+        type: primary
+        expr: fact_key
+      - name: date_utc
+        type: foreign
+        expr: date_utc_key
+      - name: date_eg
+        type: foreign
+        expr: date_eg_key
+      - name: time_utc
+        type: foreign
+        expr: time_utc_key
+      - name: time_eg
+        type: foreign
+        expr: time_eg_key
+      - name: market_regime
+        type: foreign
+        expr: market_regime_key
+
+    measures:
+      - name: total_volume_btc
+        description: "Total traded volume in BTC."
+        expr: volume
+        agg: sum
+
+      - name: total_quote_volume_usd
+        description: "Total traded volume in USDT (USD equivalent)."
+        expr: quote_asset_volume
+        agg: sum
+
+      - name: trade_count
+        description: "Total count of executed trades."
+        expr: number_of_trades
+        agg: sum
+
+      - name: taker_buy_volume_btc
+        description: "Base asset volume bought by market takers executing against asks."
+        expr: taker_buy_base_asset_volume
+        agg: sum
+
+      - name: taker_sell_volume_btc
+        description: "Base asset volume sold by market takers executing against bids."
+        expr: taker_sell_base_asset_volume
+        agg: sum
+
+      - name: taker_buy_volume_usd
+        description: "Quote asset volume spent by market takers."
+        expr: taker_buy_quote_asset_volume
+        agg: sum
+
+      - name: taker_sell_volume_usd
+        description: "Quote asset volume received by market takers."
+        expr: taker_sell_quote_asset_volume
+        agg: sum
+
+      - name: max_high_price
+        description: "Maximum recorded price reached during the period."
+        expr: high
+        agg: max
+
+      - name: min_low_price
+        description: "Minimum recorded price reached during the period."
+        expr: low
+        agg: min
+
+      - name: avg_rsi_14s
+        description: "Average 14-second Relative Strength Index momentum."
+        expr: rsi_14_sec
+        agg: average
+
+      - name: avg_realized_volatility_60s
+        description: "Average 60-second rolling realized volatility."
+        expr: realized_volatility_60s
+        agg: average
+
+      - name: avg_candle_spread
+        description: "Average price spread (High minus Low) in USDT."
+        expr: candle_spread
+        agg: average
+
+      - name: avg_buy_sell_imbalance
+        description: "Average order flow imbalance ratio between taker buy and sell volumes."
+        expr: buy_sell_imbalance
+        agg: average
+
+  # =========================================================================
+  # 2. Date Dimension Semantic Model (dim_date)
+  # =========================================================================
+  - name: dim_date
+    model: ref('dim_date')
+    description: "Date dimension supporting temporal aggregations."
+
+    entities:
+      - name: date_utc
+        type: primary
+        expr: date_key
+
+    dimensions:
+      - name: calendar_date
+        type: time
+        type_params:
+          time_granularity: day
+
+      - name: day_of_week
+        type: categorical
+
+      - name: month_name
+        type: categorical
+
+      - name: quarter
+        type: categorical
+
+      - name: year
+        type: categorical
+
+      - name: is_weekend
+        type: categorical
+
+  # =========================================================================
+  # 3. Market Regime Dimension Semantic Model (dim_market_regime)
+  # =========================================================================
+  - name: dim_market_regime
+    model: ref('dim_market_regime')
+    description: "Market regime dimension categorizing volatility, RSI, and order flow states."
+
+    entities:
+      - name: market_regime
+        type: primary
+        expr: market_regime_key
+
+    dimensions:
+      - name: rsi_regime
+        type: categorical
+
+      - name: imbalance_regime
+        type: categorical
+
+      - name: volatility_regime
+        type: categorical
+
+      - name: spread_category
+        type: categorical
+
+      - name: is_volatility_spike
+        type: categorical
+
+      - name: extreme_wick_flag
+        type: categorical

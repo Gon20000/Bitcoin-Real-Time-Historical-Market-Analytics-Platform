@@ -1,0 +1,94 @@
+version: 2
+
+metrics:
+  # =========================================================================
+  # Simple Metrics (Aggregations over single measures)
+  # =========================================================================
+  - name: bitcoin_trading_volume_usd
+    label: "Bitcoin Trading Volume (USDT)"
+    description: "Aggregated Bitcoin trading volume in USDT."
+    type: simple
+    type_params:
+      measure: total_quote_volume_usd
+
+  - name: bitcoin_trading_volume_btc
+    label: "Bitcoin Trading Volume (BTC)"
+    description: "Aggregated Bitcoin trading volume in base asset (BTC)."
+    type: simple
+    type_params:
+      measure: total_volume_btc
+
+  - name: total_trades_count
+    label: "Executed Trades Count"
+    description: "Total number of completed market trades."
+    type: simple
+    type_params:
+      measure: trade_count
+
+  - name: average_market_rsi
+    label: "Average RSI (14s)"
+    description: "Average 14-second Relative Strength Index momentum."
+    type: simple
+    type_params:
+      measure: avg_rsi_14s
+
+  - name: average_realized_volatility
+    label: "Average Realized Volatility (60s)"
+    description: "Average 60-second rolling realized volatility level."
+    type: simple
+    type_params:
+      measure: avg_realized_volatility_60s
+
+  - name: average_order_imbalance
+    label: "Average Order Flow Imbalance"
+    description: "Average taker buy vs sell imbalance ratio."
+    type: simple
+    type_params:
+      measure: avg_buy_sell_imbalance
+
+  - name: period_max_high_price
+    label: "Max High Price"
+    description: "Highest price achieved during the selected period."
+    type: simple
+    type_params:
+      measure: max_high_price
+
+  - name: period_min_low_price
+    label: "Min Low Price"
+    description: "Lowest price achieved during the selected period."
+    type: simple
+    type_params:
+      measure: min_low_price
+
+  # =========================================================================
+  # Derived Metrics (Calculated combinations across measures/metrics)
+  # =========================================================================
+  - name: net_taker_volume_flow_btc
+    label: "Net Taker Volume Flow (BTC)"
+    description: "Net order flow in BTC: Taker Buy Volume minus Taker Sell Volume."
+    type: derived
+    type_params:
+      expr: taker_buy_volume_btc - taker_sell_volume_btc
+      metrics:
+        - name: taker_buy_volume_btc
+        - name: taker_sell_volume_btc
+
+  - name: net_taker_volume_flow_usd
+    label: "Net Taker Volume Flow (USDT)"
+    description: "Net order flow in USDT: Taker Buy Quote Volume minus Taker Sell Quote Volume."
+    type: derived
+    type_params:
+      expr: taker_buy_volume_usd - taker_sell_volume_usd
+      metrics:
+        - name: taker_buy_volume_usd
+        - name: taker_sell_volume_usd
+
+  - name: period_price_range
+    label: "Period Price Range (USDT)"
+    description: "The price range span (Max High minus Min Low) across the selected interval."
+    type: derived
+    type_params:
+      expr: max_high_price - min_low_price
+      metrics:
+        - name: period_max_high_price
+        - name: period_min_low_price
