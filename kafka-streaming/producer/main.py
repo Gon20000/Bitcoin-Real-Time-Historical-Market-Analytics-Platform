@@ -28,7 +28,13 @@ import sys
 
 import websockets
 from confluent_kafka import Producer
-from tenacity import before_sleep_log, retry, wait_random_exponential
+from tenacity import (
+    before_sleep_log,
+    retry,
+    retry_if_exception_type,
+    retry_if_not_exception_type,
+    wait_random_exponential,
+)
 from websockets.exceptions import ConnectionClosed
 
 LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO").upper()
@@ -39,6 +45,16 @@ STREAM_URL = os.getenv(
 )
 # I will declare symbols as an array to allow future expansion to multiple symbols if needed
 SYMBOLS = [s.strip() for s in os.getenv("SYMBOLS", "BTCUSDT").split(",") if s.strip()]
+
+
+# Shutdown timeouts for Kafka producer flush and enqueue operations.
+KAFKA_ENQUEUE_SHUTDOWN_TIMEOUT = float(os.getenv("KAFKA_ENQUEUE_SHUTDOWN_TIMEOUT", "5"))
+KAFKA_FLUSH_TIMEOUT = float(os.getenv("KAFKA_FLUSH_TIMEOUT", "20"))
+
+
+class ShutdownEnqueueError(Exception):
+    """Raised when an in-flight candle cannot be queued before shutdown deadline."""
+
 
 logging.basicConfig(
     level=getattr(logging, LOG_LEVEL, logging.INFO),
@@ -54,17 +70,10 @@ def kafka_delivery_report(err, msg):
         logger.debug(f"Delivered to {msg.topic()} [{msg.partition()}] @ {msg.offset()}")
 
 
-async def produce_kline(
-    producer: Producer,
-    topic: str,
-    symbol: str,
-    payload: dict,
-    stop_event: asyncio.Event,
+async def _enqueue_with_backpressure(
+    producer: Producer, topic: str, key: bytes, value: bytes
 ) -> None:
-    key = symbol.encode("utf-8")
-    value = json.dumps(payload).encode("utf-8")
     attempts = 0
-
     while True:
         try:
             producer.produce(topic=topic, key=key, value=value)
@@ -77,18 +86,45 @@ async def produce_kline(
                     f"Producer queue full ({len(producer)} pending). "
                     f"Applying backpressure (attempt {attempts})..."
                 )
-
             # Poll the producer to handle delivery reports and free up space in the queue (skipped in the try)
             producer.poll(0)
-            if stop_event.is_set():
-                logger.error(
-                    f"Shutdown interrupted queuing for {symbol} at "
-                    f"open_time={payload.get('k', {}).get('t')} while producer queue was full."
-                )
-                return
 
             # Yields control back to the event loop so ping/pong messages can be processed and the queue can be drained
             await asyncio.sleep(min(0.1 * attempts, 1))
+
+
+async def produce_kline(
+    producer: Producer,
+    topic: str,
+    symbol: str,
+    payload: dict,
+    stop_event: asyncio.Event,
+    shutdown_timeout: float = KAFKA_ENQUEUE_SHUTDOWN_TIMEOUT,
+) -> None:
+    key = symbol.encode("utf-8")
+    value = json.dumps(payload).encode("utf-8")
+
+    # 1. Normal path: retry as long as needed until accepted
+    if not stop_event.is_set():
+        try:
+            await _enqueue_with_backpressure(producer, topic, key, value)
+            return
+        except asyncio.CancelledError:
+            # Shutdown interrupted us while holding a candle; fall through to step 2
+            stop_event.set()
+
+    # 2. Shutdown path: give this one candle a few seconds to finish queuing
+    try:
+        await asyncio.wait_for(
+            _enqueue_with_backpressure(producer, topic, key, value),
+            timeout=shutdown_timeout,
+        )
+    except TimeoutError:
+        logger.error(
+            f"Timed out queueing in-flight kline for {symbol} at "
+            f"open_time={payload.get('k', {}).get('t')} during shutdown."
+        )
+        raise ShutdownEnqueueError("In-flight kline dropped on shutdown.")
 
 
 def parse_kline_message(raw_message: str) -> tuple[str, dict] | None:
@@ -141,6 +177,8 @@ async def receive_messages(
         except ConnectionClosed as e:
             logger.error(f"Connection closed: {e}. Attempting to reconnect...")
             raise
+        except ShutdownEnqueueError:
+            raise
         except Exception as e:
             logger.error(f"Unexpected error: {e}. Attempting to reconnect...")
             raise
@@ -148,12 +186,17 @@ async def receive_messages(
 
 @retry(
     wait=wait_random_exponential(multiplier=1, min=1, max=30),
+    # we explicitly set Exception as the base class to ensure the retry_if_not doesn't include baseException errors
+    retry=retry_if_exception_type(Exception)
+    & retry_if_not_exception_type(ShutdownEnqueueError),
     before_sleep=before_sleep_log(logger, logging.WARNING),
 )
 async def connect_to_binance(producer: Producer, stop_event: asyncio.Event) -> None:
     # connect to the stream, subscribe to the symbols and
     # increase max_queue for better handling of worst-case scenarios
-    async with websockets.connect(STREAM_URL, max_queue=1024) as websocket:
+    async with websockets.connect(
+        STREAM_URL, max_queue=1024, close_timeout=2
+    ) as websocket:
         subscribe_message = {
             "method": "SUBSCRIBE",
             "params": [f"{symbol.lower()}@kline_1s" for symbol in SYMBOLS],
@@ -172,14 +215,25 @@ async def main():
     stop_event = asyncio.Event()
     loop = asyncio.get_running_loop()
 
-    is_shutting_down = False
-    shutdown_delivery_failures = 0
+    delivery_failures = 0
+    stream_task: asyncio.Task | None = None
 
     def on_delivery(err, msg) -> None:
-        nonlocal shutdown_delivery_failures
-        if err is not None and is_shutting_down:
-            shutdown_delivery_failures += 1
+        nonlocal delivery_failures
         kafka_delivery_report(err, msg)
+
+        if err is not None:
+            delivery_failures += 1
+            # only stop the producer if the stop_event is not already set, to avoid redundant logging and cancellation
+            if not stop_event.is_set():
+                logger.error(
+                    "Permanent Kafka delivery failure detected; "
+                    "stopping producer to fail fast."
+                )
+
+                stop_event.set()
+                if stream_task is not None and not stream_task.done():
+                    stream_task.cancel()
 
     producer = Producer(
         {
@@ -195,7 +249,8 @@ async def main():
     def handle_shutdown() -> None:
         logger.info("Shutdown signal received. Stopping producer...")
         stop_event.set()
-        stream_task.cancel()
+        if stream_task is not None and not stream_task.done():
+            stream_task.cancel()
 
     for sig in (signal.SIGINT, signal.SIGTERM):
         # Register signal handlers to set the stop_event when a SIGINT or SIGTERM is received
@@ -205,16 +260,24 @@ async def main():
     try:
         await stream_task
     except asyncio.CancelledError:
-        logger.info("Streaming task cancelled cleanly.")
+        if delivery_failures > 0:
+            logger.error("Streaming task cancelled due to Kafka delivery failures.")
+        else:
+            logger.info("Streaming task cancelled cleanly.")
+    except ShutdownEnqueueError:
+        shutdown_failed = True
     finally:
-        is_shutting_down = True
+        # Ensure the stop_event is set to signal shutdown to avoid further redundant logging
+        stop_event.set()
         logger.info("Flushing remaining messages to Kafka...")
         # Flush the producer to ensure all messages are sent before shutdown
-        remaining = producer.flush()
-        if remaining > 0 or shutdown_delivery_failures > 0:
+        # (20 + 5)s is just below docker's 30s stop_grace_period, so we can still log if the flush failed to complete in time.
+        remaining = producer.flush(KAFKA_FLUSH_TIMEOUT)
+        if remaining > 0 or delivery_failures > 0 or shutdown_failed:
             logger.error(
                 f"Shutdown failed to deliver all Kafka records "
-                f"(remaining={remaining}, failed={shutdown_delivery_failures})."
+                f"(remaining={remaining}, failed={delivery_failures}, "
+                f"enqueue_failed={shutdown_failed})."
             )
             shutdown_failed = True
         else:
