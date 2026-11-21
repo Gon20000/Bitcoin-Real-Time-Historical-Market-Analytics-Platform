@@ -1,0 +1,120 @@
+version: 2
+
+models:
+  - name: dim_date
+    description: "Calendar date dimension supporting UTC and Egyptian local time analysis"
+    columns:
+      - name: date_key
+        description: "Primary surrogate key (YYYYMMDD)"
+        tests:
+          - unique
+          - not_null
+      - name: calendar_date
+        description: "Standard ISO calendar date"
+        tests:
+          - not_null
+      - name: year
+        tests:
+          - not_null
+      - name: month_of_year
+        tests:
+          - not_null
+
+  - name: dim_time
+    description: "Second-level granular time dimension (86,400 seconds)"
+    columns:
+      - name: time_key
+        description: "Primary surrogate key (HHMMSS)"
+        tests:
+          - unique
+          - not_null
+      - name: time_of_day
+        tests:
+          - not_null
+
+  - name: dim_market_regime
+    description: "Junk dimension categorizing technical indicators and market conditions"
+    columns:
+      - name: market_regime_key
+        description: "Primary key for market regime combination"
+        tests:
+          - unique
+          - not_null
+      - name: rsi_regime
+        tests:
+          - not_null
+      - name: imbalance_regime
+        tests:
+          - not_null
+      - name: volatility_regime
+        tests:
+          - not_null
+
+  - name: fct_btc_klines_1s
+    description: "1-second Bitcoin analytical candlestick fact table"
+    columns:
+      - name: fact_key
+        description: "Surrogate key uniquely identifying each 1-second candle"
+        tests:
+          - unique
+          - not_null
+
+      - name: date_utc_key
+        description: "Foreign key to dim_date (UTC)"
+        tests:
+          - not_null
+          - relationships:
+              to: ref('dim_date')
+              field: date_key
+
+      - name: date_eg_key
+        description: "Foreign key to dim_date (Cairo local time)"
+        tests:
+          - not_null
+          - relationships:
+              to: ref('dim_date')
+              field: date_key
+
+      - name: time_utc_key
+        description: "Foreign key to dim_time (UTC)"
+        tests:
+          - not_null
+          - relationships:
+              to: ref('dim_time')
+              field: time_key
+
+      - name: time_eg_key
+        description: "Foreign key to dim_time (Cairo local time)"
+        tests:
+          - not_null
+          - relationships:
+              to: ref('dim_time')
+              field: time_key
+
+      - name: market_regime_key
+        description: "Foreign key to dim_market_regime"
+        tests:
+          - not_null
+          - relationships:
+              to: ref('dim_market_regime')
+              field: market_regime_key
+
+      - name: open
+        tests:
+          - not_null
+
+      - name: close
+        tests:
+          - not_null
+
+      - name: volume
+        tests:
+          - not_null
+
+      - name: rsi_14_sec
+        tests:
+          - not_null
+
+      - name: realized_volatility_60s
+        tests:
+          - not_null

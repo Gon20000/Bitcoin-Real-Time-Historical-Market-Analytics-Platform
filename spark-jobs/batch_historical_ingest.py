@@ -100,9 +100,7 @@ def transform_to_silver(raw_df: DataFrame) -> DataFrame:
         .withColumn("high_price", F.col("high_price").cast(decimal_type))
         .withColumn("low_price", F.col("low_price").cast(decimal_type))
         .withColumn("close_price", F.col("close_price").cast(decimal_type))
-        .withColumn(
-            "base_asset_volume", F.col("base_asset_volume").cast(decimal_type)
-        )
+        .withColumn("base_asset_volume", F.col("base_asset_volume").cast(decimal_type))
         .withColumn(
             "quote_asset_volume", F.col("quote_asset_volume").cast(decimal_type)
         )
@@ -195,7 +193,7 @@ def main() -> None:
 
         print("[INFO] Batch ingestion and cleaning completed successfully! [DONE]")
 
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001
         print(f"[ERROR] Pipeline execution failed: {e}", file=sys.stderr)
         sys.exit(1)
 
