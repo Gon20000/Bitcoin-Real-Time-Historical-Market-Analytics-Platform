@@ -138,6 +138,10 @@ def parse_kline_message(raw_message: str) -> tuple[str, dict] | None:
         logger.error(f"Error received from server: {res['error']}")
         return None
 
+    if "code" in res and "msg" in res:
+        logger.error(f"Error received from server: {res}")
+        raise ConnectionError("Server rejected WebSocket request")
+
     if "result" in res and "id" in res:
         logger.info(f"Subscription confirmed: {res}")
         return None
