@@ -1,4 +1,4 @@
-"""Verify Kafka broker metadata and multi-partition produce/consume roundtrip."""
+"""Verify Kafka broker metadata, readability, and multi-partition roundtrip."""
 
 from __future__ import annotations
 
@@ -9,13 +9,24 @@ import sys
 import time
 import uuid
 
-from confluent_kafka import Consumer, Producer, TopicPartition
-from confluent_kafka.admin import AdminClient, ConfigResource, ResourceType
+from confluent_kafka import (
+    Consumer,
+    KafkaError,
+    KafkaException,
+    Producer,
+    TopicPartition,
+)
+from confluent_kafka.admin import AdminClient, ConfigResource, NewTopic, ResourceType
 
 DEFAULT_BOOTSTRAP_SERVERS = os.getenv("KAFKA_BOOTSTRAP_SERVERS", "localhost:9092")
 DEFAULT_TOPIC = os.getenv("KAFKA_TOPIC", "prod.binance.btc_usdt_1s.v1")
 EXPECTED_PARTITIONS = 3
 EXPECTED_RETENTION_MS = "86400000"  # 24 hours
+TRANSIENT_PARTITION_ERRORS = {
+    KafkaError.UNKNOWN_TOPIC_OR_PART,
+    KafkaError.LEADER_NOT_AVAILABLE,
+    KafkaError.NOT_LEADER_FOR_PARTITION,
+}
 
 
 def verify_topic_metadata(
@@ -25,7 +36,7 @@ def verify_topic_metadata(
     expected_retention_ms: str,
     timeout: float,
 ) -> list[int]:
-    """Confirm the topic exists with the required partition count and retention."""
+    """Confirm the target topic exists with the required partitions and retention."""
     admin = AdminClient({"bootstrap.servers": bootstrap_servers})
 
     metadata = admin.list_topics(topic=topic, timeout=timeout)
@@ -39,6 +50,14 @@ def verify_topic_metadata(
         raise RuntimeError(
             f"Expected {expected_partitions} partitions for '{topic}', "
             f"found {len(partitions)} ({partitions})."
+        )
+
+    unassigned = [
+        pid for pid, pmeta in topic_meta.partitions.items() if pmeta.leader < 0
+    ]
+    if unassigned:
+        raise RuntimeError(
+            f"Partitions without an elected leader on '{topic}': {sorted(unassigned)}."
         )
 
     resource = ConfigResource(ResourceType.TOPIC, topic)
@@ -59,6 +78,40 @@ def verify_topic_metadata(
     return partitions
 
 
+def verify_topic_readability(
+    bootstrap_servers: str,
+    topic: str,
+    partitions: list[int],
+    timeout: float,
+) -> None:
+    """Confirm all target topic partitions are readable without writing to them."""
+    consumer = Consumer(
+        {
+            "bootstrap.servers": bootstrap_servers,
+            "group.id": f"verify-read-{uuid.uuid4().hex}",
+            "enable.auto.commit": False,
+        }
+    )
+    try:
+        watermarks: dict[int, tuple[int, int]] = {}
+        for partition in partitions:
+            offsets = consumer.get_watermark_offsets(
+                TopicPartition(topic, partition),
+                timeout=timeout,
+                cached=False,
+            )
+            if offsets is None:
+                raise RuntimeError(
+                    f"Timed out reading watermarks for '{topic}' partition {partition}."
+                )
+            watermarks[partition] = offsets
+        print(
+            f"[OK] Target topic '{topic}' partitions readable (watermarks={watermarks})"
+        )
+    finally:
+        consumer.close()
+
+
 def verify_partition_roundtrip(
     bootstrap_servers: str,
     topic: str,
@@ -76,14 +129,31 @@ def verify_partition_roundtrip(
     )
 
     try:
-        # Capture current end offsets before producing so we only read our probes
+        watermark_deadline = time.monotonic() + timeout
         start_positions: list[TopicPartition] = []
         for partition in partitions:
-            offsets = consumer.get_watermark_offsets(
-                TopicPartition(topic, partition),
-                timeout=timeout,
-                cached=False,
-            )
+            offsets: tuple[int, int] | None = None
+            while time.monotonic() < watermark_deadline:
+                try:
+                    offsets = consumer.get_watermark_offsets(
+                        TopicPartition(topic, partition),
+                        timeout=min(
+                            2.0, max(0.5, watermark_deadline - time.monotonic())
+                        ),
+                        cached=False,
+                    )
+                    if offsets is not None:
+                        break
+                except KafkaException as exc:
+                    err = exc.args[0] if exc.args else None
+                    if (
+                        isinstance(err, KafkaError)
+                        and err.code() in TRANSIENT_PARTITION_ERRORS
+                    ):
+                        time.sleep(0.2)
+                        continue
+                    raise
+                time.sleep(0.2)
             if offsets is None:
                 raise RuntimeError(
                     f"Timed out fetching watermarks for partition {partition}."
@@ -94,7 +164,7 @@ def verify_partition_roundtrip(
 
         delivery_errors: list[str] = []
 
-        def on_delivery(err, _msg) -> None:
+        def on_delivery(err: object, _msg: object) -> None:
             if err is not None:
                 delivery_errors.append(str(err))
 
@@ -123,7 +193,10 @@ def verify_partition_roundtrip(
                 f"Failed to deliver probe messages "
                 f"(remaining={remaining}, errors={delivery_errors})."
             )
-        print(f"[OK] Produced {len(partitions)} probe messages across {partitions}")
+        print(
+            f"[OK] Produced {len(partitions)} probe messages "
+            f"to '{topic}' across {partitions}"
+        )
 
         received: dict[int, dict[str, object]] = {}
         deadline = time.monotonic() + timeout
@@ -139,11 +212,12 @@ def verify_partition_roundtrip(
             if not raw_value:
                 continue
             try:
-                decoded = json.loads(
+                text = (
                     raw_value.decode("utf-8")
                     if isinstance(raw_value, bytes)
                     else raw_value
                 )
+                decoded = json.loads(text)
             except json.JSONDecodeError:
                 continue
 
@@ -167,6 +241,91 @@ def verify_partition_roundtrip(
             )
     finally:
         consumer.close()
+
+
+def verify_ephemeral_roundtrip(
+    bootstrap_servers: str,
+    partitions: list[int],
+    timeout: float,
+) -> None:
+    """Run a multi-partition roundtrip on a temporary topic so production stays clean."""
+    admin = AdminClient({"bootstrap.servers": bootstrap_servers})
+    probe_topic = f"verify.kafka.probe.{uuid.uuid4().hex[:8]}"
+
+    admin.create_topics(
+        [
+            NewTopic(
+                topic=probe_topic,
+                num_partitions=len(partitions),
+                replication_factor=1,
+            )
+        ]
+    )[probe_topic].result(timeout=timeout)
+
+    try:
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline:
+            meta = admin.list_topics(topic=probe_topic, timeout=2.0).topics.get(
+                probe_topic
+            )
+            if (
+                meta is not None
+                and meta.error is None
+                and len(meta.partitions) == len(partitions)
+                and all(p.leader >= 0 for p in meta.partitions.values())
+            ):
+                break
+            time.sleep(0.2)
+        else:
+            raise RuntimeError(
+                f"Timed out waiting for temporary topic '{probe_topic}' to be ready."
+            )
+
+        verify_partition_roundtrip(
+            bootstrap_servers=bootstrap_servers,
+            topic=probe_topic,
+            partitions=partitions,
+            timeout=timeout,
+        )
+    finally:
+        try:
+            admin.delete_topics([probe_topic])[probe_topic].result(timeout=timeout)
+            print(f"[OK] Cleaned up temporary probe topic '{probe_topic}'")
+        except Exception as exc:
+            print(
+                f"[WARN] Failed to delete temporary probe topic '{probe_topic}': {exc}",
+                file=sys.stderr,
+            )
+
+
+def run_kafka_verification(
+    bootstrap_servers: str = DEFAULT_BOOTSTRAP_SERVERS,
+    topic: str = DEFAULT_TOPIC,
+    expected_partitions: int = EXPECTED_PARTITIONS,
+    expected_retention_ms: str = EXPECTED_RETENTION_MS,
+    timeout: float = 10.0,
+) -> None:
+    """Verify topic config, read-only partition access, and broker roundtrip."""
+    print(f"Verifying Kafka at {bootstrap_servers} for topic '{topic}'...")
+    partitions = verify_topic_metadata(
+        bootstrap_servers=bootstrap_servers,
+        topic=topic,
+        expected_partitions=expected_partitions,
+        expected_retention_ms=expected_retention_ms,
+        timeout=timeout,
+    )
+    verify_topic_readability(
+        bootstrap_servers=bootstrap_servers,
+        topic=topic,
+        partitions=partitions,
+        timeout=timeout,
+    )
+    verify_ephemeral_roundtrip(
+        bootstrap_servers=bootstrap_servers,
+        partitions=partitions,
+        timeout=timeout,
+    )
+    print("[PASS] Kafka broker, topic config, and all partitions verified.")
 
 
 def parse_args() -> argparse.Namespace:
@@ -201,31 +360,6 @@ def parse_args() -> argparse.Namespace:
         help="Timeout in seconds for broker and consumer operations.",
     )
     return parser.parse_args()
-
-
-def run_kafka_verification(
-    bootstrap_servers: str = DEFAULT_BOOTSTRAP_SERVERS,
-    topic: str = DEFAULT_TOPIC,
-    expected_partitions: int = EXPECTED_PARTITIONS,
-    expected_retention_ms: str = EXPECTED_RETENTION_MS,
-    timeout: float = 10.0,
-) -> None:
-    """Run metadata and multi-partition roundtrip checks against Kafka."""
-    print(f"Verifying Kafka at {bootstrap_servers} for topic '{topic}'...")
-    partitions = verify_topic_metadata(
-        bootstrap_servers=bootstrap_servers,
-        topic=topic,
-        expected_partitions=expected_partitions,
-        expected_retention_ms=expected_retention_ms,
-        timeout=timeout,
-    )
-    verify_partition_roundtrip(
-        bootstrap_servers=bootstrap_servers,
-        topic=topic,
-        partitions=partitions,
-        timeout=timeout,
-    )
-    print("[PASS] Kafka broker, topic config, and all partitions verified.")
 
 
 def main() -> None:

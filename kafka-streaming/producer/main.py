@@ -306,8 +306,10 @@ if __name__ == "__main__":
     args = parser.parse_args()
 
     if args.verify:
-        from producer.verify import run_kafka_verification
-
+        if __package__:
+            from .verify import run_kafka_verification
+        else:
+            from verify import run_kafka_verification  # pyright: ignore[reportMissingImports]
         try:
             run_kafka_verification(
                 bootstrap_servers=args.bootstrap_servers,
