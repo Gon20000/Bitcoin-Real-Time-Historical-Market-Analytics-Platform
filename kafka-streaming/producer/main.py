@@ -20,6 +20,7 @@ TODO: historical backfill: we should be able to backfill data that was lost due 
 """
 
 import asyncio
+import argparse
 import json
 import logging
 import os
@@ -294,4 +295,28 @@ async def main():
 
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    parser = argparse.ArgumentParser(description="Binance WebSocket-to-Kafka producer.")
+    parser.add_argument(
+        "--verify",
+        action="store_true",
+        help="Verify Kafka topic config and multi-partition roundtrip, then exit.",
+    )
+    parser.add_argument("--bootstrap-servers", default=KAFKA_BROKER)
+    parser.add_argument("--topic", default=KAFKA_TOPIC)
+    args = parser.parse_args()
+
+    if args.verify:
+        if __package__:
+            from .verify import run_kafka_verification
+        else:
+            from verify import run_kafka_verification  # pyright: ignore[reportMissingImports]
+        try:
+            run_kafka_verification(
+                bootstrap_servers=args.bootstrap_servers,
+                topic=args.topic,
+            )
+        except Exception as exc:
+            logger.error(f"Kafka verification failed: {exc}")
+            sys.exit(1)
+    else:
+        asyncio.run(main())
