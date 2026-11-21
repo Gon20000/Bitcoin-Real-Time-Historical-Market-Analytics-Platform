@@ -1,0 +1,14 @@
+[tool.pytest.ini_options]
+minversion = "7.0"
+testpaths = ["tests"]
+pythonpath = [
+    ".",
+    "kafka-streaming",
+    "spark-jobs",
+]
+
+[tool.pyright]
+extraPaths = [
+    "kafka-streaming",
+    "spark-jobs",
+]

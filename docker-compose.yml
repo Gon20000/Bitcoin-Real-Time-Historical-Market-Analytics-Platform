@@ -91,7 +91,7 @@ services:
     environment:
       - KAFKA_BOOTSTRAP_SERVERS=kafka:29092
       - KAFKA_TOPIC=${KAFKA_TOPIC:-prod.binance.btc_usdt_1s.v1}
-      - BINANCE_WS_URL=wss://fstream.binance.com/ws/btcusdt@kline_1s
+      - BINANCE_WS_URL=wss://stream.binance.com:9443/stream?timeUnit=MICROSECOND
     volumes:
       - ./kafka-streaming/producer:/app/producer
     depends_on:
@@ -100,6 +100,7 @@ services:
     restart: unless-stopped
     networks:
       - btc-analytics-net
+    stop_grace_period: 30s  # Allow time for graceful shutdown and queue draining
 
   # ---------------------------------------------------------------------------
   # 2. COMPUTE LAYER (PySpark 3.5 Cluster, Structured Streaming & Batch)

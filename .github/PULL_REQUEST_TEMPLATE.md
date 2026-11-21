@@ -14,7 +14,7 @@
 
 ## Data Engineering Guardrails (If Applicable)
 - [ ] **64-Bit Decimal Precision:** Price and volume columns use `DECIMAL(18, 8)` (or agreed `DECIMAL(18, x)` scale) — zero `float` or `DOUBLE` types used.
-- [ ] **1-Second Timestamp Alignment:** Historical 16-digit microsecond CSVs (`/ 1e6`) and 13-digit millisecond WebSocket payloads (`/ 1e3`) are truncated to exact UTC seconds.
+- [ ] **1-Second Timestamp Alignment:** 16-digit microsecond historical CSVs and WebSocket payloads (/ 1e6) are truncated to exact UTC seconds.
 - [ ] **Cross-Database Compatibility (If dbt):** Uses cross-database dbt macros (e.g., `dbt.date_trunc`, `dbt.dateadd`) and Trino-compatible syntax for future Azure Synapse migration.
 - [ ] **Streaming Idempotency:** Live WebSocket ingestion filters for `"x": true` (closed 1s candles only).
 - [ ] **Testing:** Relevant `pytest` unit tests (`make test`) or `dbt test` checks pass locally.
