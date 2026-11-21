@@ -141,10 +141,18 @@ services:
     container_name: btc-spark-streaming
     profiles: ["streaming", "full-stack"]
     user: root
+    environment:
+      KAFKA_BOOTSTRAP_SERVERS: kafka:29092
+      KAFKA_TOPIC: ${KAFKA_TOPIC:-prod.binance.btc_usdt_1s.v1}
+    volumes:
+      - ./spark-jobs:/opt/spark/jobs
+      - ./data:/opt/spark/data
+      - ./data/checkpoints:/opt/spark/checkpoints
     command: >
       /opt/spark/bin/spark-submit
       --master spark://spark-master:7077
       --packages org.apache.spark:spark-sql-kafka-0-10_2.12:3.5.0,io.delta:delta-spark_2.12:3.1.0
+      --conf "spark.driver.host=spark-streaming-job"
       --conf "spark.sql.extensions=io.delta.sql.DeltaSparkSessionExtension"
       --conf "spark.sql.catalog.spark_catalog=org.apache.spark.sql.delta.catalog.DeltaCatalog"
       --conf "spark.sql.session.timeZone=UTC"
