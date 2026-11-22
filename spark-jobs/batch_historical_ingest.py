@@ -13,12 +13,10 @@ from pyspark.sql import functions as F  # pyright: ignore[reportMissingImports]
 from pyspark.sql import types as T  # pyright: ignore[reportMissingImports]
 
 
-def get_spark_session(
-    app_name: str = "Binance_Historical_Batch_Ingest",
-) -> SparkSession:
+def get_spark_session() -> SparkSession:
     """Initialize and configure a Delta Lake-enabled SparkSession."""
     return (
-        SparkSession.builder.appName(app_name)
+        SparkSession.builder.appName("Binance_Historical_Batch_Ingest")
         .config("spark.sql.extensions", "io.delta.sql.DeltaSparkSessionExtension")
         .config(
             "spark.sql.catalog.spark_catalog",
@@ -59,7 +57,7 @@ DEFAULT_OUTPUT_DIR = os.getenv(
 )
 
 
-def normalize_to_silver(raw_df: DataFrame) -> DataFrame:
+def transform_to_silver(raw_df: DataFrame) -> DataFrame:
     """Standardize timestamps, types, validation, and partitions for Silver."""
     decimal_type = T.DecimalType(18, 8)
 
@@ -69,11 +67,11 @@ def normalize_to_silver(raw_df: DataFrame) -> DataFrame:
             "open_time_sec",
             F.when(
                 F.col("open_time") >= 100_000_000_000_000,
-                F.expr("open_time DIV 1000000"),
+                (F.col("open_time") / 1_000_000).cast(T.LongType()),
             )
             .when(
                 F.col("open_time") >= 100_000_000_000,
-                F.expr("open_time DIV 1000"),
+                (F.col("open_time") / 1_000).cast(T.LongType()),
             )
             .otherwise(F.col("open_time")),
         )
@@ -81,11 +79,11 @@ def normalize_to_silver(raw_df: DataFrame) -> DataFrame:
             "close_time_sec",
             F.when(
                 F.col("close_time") >= 100_000_000_000_000,
-                F.expr("close_time DIV 1000000"),
+                (F.col("close_time") / 1_000_000).cast(T.LongType()),
             )
             .when(
                 F.col("close_time") >= 100_000_000_000,
-                F.expr("close_time DIV 1000"),
+                (F.col("close_time") / 1_000).cast(T.LongType()),
             )
             .otherwise(F.col("close_time")),
         )
@@ -102,7 +100,9 @@ def normalize_to_silver(raw_df: DataFrame) -> DataFrame:
         .withColumn("high_price", F.col("high_price").cast(decimal_type))
         .withColumn("low_price", F.col("low_price").cast(decimal_type))
         .withColumn("close_price", F.col("close_price").cast(decimal_type))
-        .withColumn("base_asset_volume", F.col("base_asset_volume").cast(decimal_type))
+        .withColumn(
+            "base_asset_volume", F.col("base_asset_volume").cast(decimal_type)
+        )
         .withColumn(
             "quote_asset_volume", F.col("quote_asset_volume").cast(decimal_type)
         )
@@ -122,13 +122,19 @@ def normalize_to_silver(raw_df: DataFrame) -> DataFrame:
         "month", F.month("open_time")
     )
 
-    # 4. Apply the Silver data quality checks
+    # 4. Rigorous data quality filtering, deduplication, and partition-local sorting
     validation_filter = (
         F.col("open_time").isNotNull()
         & (F.col("open_price") > 0)
         & (F.col("close_price") > 0)
         & (F.col("high_price") >= F.col("low_price"))
         & (F.col("base_asset_volume") >= 0)
+    )
+
+    silver_df = (
+        silver_df.filter(validation_filter)
+        .dropDuplicates(["open_time"])
+        .sortWithinPartitions("open_time")
     )
 
     # 5. Enforce explicit column order
@@ -150,16 +156,7 @@ def normalize_to_silver(raw_df: DataFrame) -> DataFrame:
         "month",
     ]
 
-    return silver_df.filter(validation_filter).select(final_columns)
-
-
-def transform_to_silver(raw_df: DataFrame) -> DataFrame:
-    """Normalize historical data, then deduplicate and sort within partitions."""
-    return (
-        normalize_to_silver(raw_df)
-        .dropDuplicates(["open_time"])
-        .sortWithinPartitions("open_time")
-    )
+    return silver_df.select(final_columns)
 
 
 def write_to_silver_delta(df: DataFrame, output_path: str) -> None:

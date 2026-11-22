@@ -1,17 +1,7 @@
-"""Append closed Binance candles from Kafka to the Silver Delta table."""
-
 import os
-
-from pyspark.sql import DataFrame  # pyright: ignore[reportMissingImports]
-from pyspark.sql import functions as F  # pyright: ignore[reportMissingImports]
-from pyspark.sql import types as T  # pyright: ignore[reportMissingImports]
-
-from batch_historical_ingest import (
-    DEFAULT_OUTPUT_DIR,
-    RAW_CSV_SCHEMA,
-    get_spark_session,
-    normalize_to_silver,
-)
+from pyspark.sql import DataFrame, SparkSession 
+from pyspark.sql import functions as F 
+from pyspark.sql import types as T  
 
 KLINE_FIELDS = {
     "t": "open_time",
@@ -27,19 +17,135 @@ KLINE_FIELDS = {
     "Q": "taker_buy_quote_volume",
     "B": "ignore",
 }
+
 KLINE_SCHEMA = T.StructType(
     [
-        T.StructField(source, RAW_CSV_SCHEMA[target].dataType)
-        for source, target in KLINE_FIELDS.items()
+        T.StructField(
+            source, T.LongType() if source in {"t", "T", "n"} else T.StringType()
+        )
+        for source in KLINE_FIELDS
     ]
     + [T.StructField("x", T.BooleanType())]
 )
+
 MESSAGE_SCHEMA = T.StructType([T.StructField("k", KLINE_SCHEMA)])
+
+DEFAULT_OUTPUT_DIR = os.getenv(
+    "OUTPUT_DIR", "/opt/spark/data/silver/stg_binance_klines_1s"
+)
+
 CHECKPOINT_DIR = "/opt/spark/checkpoints/streaming_silver"
 
 
+def get_spark_session() -> SparkSession:
+    return (
+        SparkSession.builder.appName("Binance_Streaming_Silver_Ingest")
+        .config("spark.sql.extensions", "io.delta.sql.DeltaSparkSessionExtension")
+        .config(
+            "spark.sql.catalog.spark_catalog",
+            "org.apache.spark.sql.delta.catalog.DeltaCatalog",
+        )
+        .config("spark.sql.session.timeZone", "UTC")
+        .config(
+            "spark.sql.shuffle.partitions",
+            os.getenv("SPARK_SHUFFLE_PARTITIONS", "8"),
+        )
+        .config("spark.databricks.delta.optimizeWrite.enabled", "true")
+        .getOrCreate()
+    )
+
+
+def normalize_to_silver(raw_df: DataFrame) -> DataFrame:
+    
+    decimal_type = T.DecimalType(18, 8)
+
+    cleaned_df = (
+        raw_df.withColumn(
+            "open_time_sec",
+            F.when(
+                F.col("open_time") >= 100_000_000_000_000,
+                F.expr("open_time DIV 1000000"),
+            )
+            .when(
+                F.col("open_time") >= 100_000_000_000,
+                F.expr("open_time DIV 1000"),
+            )
+            .otherwise(F.col("open_time")),
+        )
+        .withColumn(
+            "close_time_sec",
+            F.when(
+                F.col("close_time") >= 100_000_000_000_000,
+                F.expr("close_time DIV 1000000"),
+            )
+            .when(
+                F.col("close_time") >= 100_000_000_000,
+                F.expr("close_time DIV 1000"),
+            )
+            .otherwise(F.col("close_time")),
+        )
+        .withColumn("open_time", F.to_timestamp(F.from_unixtime("open_time_sec")))
+        .withColumn(
+            "close_time",
+            F.to_timestamp(F.from_unixtime(F.col("close_time_sec") + 1)),
+        )
+    )
+
+    silver_df = (
+        cleaned_df.withColumn("open_price", F.col("open_price").cast(decimal_type))
+        .withColumn("high_price", F.col("high_price").cast(decimal_type))
+        .withColumn("low_price", F.col("low_price").cast(decimal_type))
+        .withColumn("close_price", F.col("close_price").cast(decimal_type))
+        .withColumn("base_asset_volume", F.col("base_asset_volume").cast(decimal_type))
+        .withColumn(
+            "quote_asset_volume", F.col("quote_asset_volume").cast(decimal_type)
+        )
+        .withColumn(
+            "taker_buy_base_asset_volume",
+            F.col("taker_buy_base_volume").cast(decimal_type),
+        )
+        .withColumn(
+            "taker_buy_quote_asset_volume",
+            F.col("taker_buy_quote_volume").cast(decimal_type),
+        )
+        .withColumn("is_candle_closed", F.lit(True))
+    )
+
+    silver_df = silver_df.withColumn("year", F.year("open_time")).withColumn(
+        "month", F.month("open_time")
+    )
+
+    validation_filter = (
+        F.col("open_time").isNotNull()
+        & (F.col("open_price") > 0)
+        & (F.col("close_price") > 0)
+        & (F.col("high_price") >= F.col("low_price"))
+        & (F.col("base_asset_volume") >= 0)
+    )
+
+    final_columns = [
+        "open_time",
+        "open_price",
+        "high_price",
+        "low_price",
+        "close_price",
+        "base_asset_volume",
+        "close_time",
+        "quote_asset_volume",
+        "number_of_trades",
+        "taker_buy_base_asset_volume",
+        "taker_buy_quote_asset_volume",
+        "is_candle_closed",
+        "ignore",
+        "year",
+        "month",
+    ]
+
+    return silver_df.filter(validation_filter).select(final_columns)
+
+
 def transform_kafka_to_silver(kafka_df: DataFrame) -> DataFrame:
-    """Decode Kafka values and map closed klines onto the historical schema."""
+    
     klines = kafka_df.select(
         F.from_json(F.col("value").cast("string"), MESSAGE_SCHEMA)
         .getField("k")
@@ -56,10 +162,10 @@ def transform_kafka_to_silver(kafka_df: DataFrame) -> DataFrame:
 
 
 def main() -> None:
-    """Read Kafka continuously and resume from the durable checkpoint on restart."""
-    spark = get_spark_session("Binance_Streaming_Silver_Ingest")
+
+    spark = get_spark_session()
     try:
-        # Binance distinguishes open/close timestamps (t/T) and volumes (v/V).
+      
         spark.conf.set("spark.sql.caseSensitive", "true")
         spark.sparkContext.setLogLevel("WARN")
 
