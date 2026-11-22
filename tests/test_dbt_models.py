@@ -20,7 +20,7 @@ def test_dbt_project_configuration():
 
 
 def test_dbt_model_naming_and_guardrails():
-    """Verify dbt models follow medallion prefixes and 64-bit decimal precision rule."""
+    """Verify dbt models follow medallion prefixes, incremental materialization, and 64-bit decimal precision."""
     staging_models = list(Path("dbt-transformations/models/staging").glob("*.sql"))
     marts_models = list(Path("dbt-transformations/models/marts").glob("*.sql"))
 
@@ -42,6 +42,18 @@ def test_dbt_model_naming_and_guardrails():
     assert (
         "decimal(18, 8)" in content
     ), "Fact model fct_btc_klines_1s must enforce DECIMAL(18, 8) precision"
+    assert (
+        "materialized='incremental'" in content
+    ), "Fact model fct_btc_klines_1s must use incremental materialization"
+    assert (
+        "unique_key='fact_key'" in content
+    ), "Fact model fct_btc_klines_1s must define fact_key as unique_key"
+    assert (
+        "is_incremental()" in content
+    ), "Fact model fct_btc_klines_1s must support incremental lookback logic"
+    assert (
+        "vwap_60s" not in content
+    ), "Fact model fct_btc_klines_1s must not expose undocumented vwap_60s (strict 23-column contract)"
 
 
 def test_dbt_semantic_layer_configuration():

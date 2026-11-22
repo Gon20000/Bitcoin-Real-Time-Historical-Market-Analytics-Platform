@@ -1,48 +1,60 @@
 {{
     config(
-        materialized='table',
-        schema='gold'
+        materialized='incremental',
+        schema='gold',
+        unique_key='fact_key',
+        incremental_strategy='merge',
+        on_schema_change='append_new_columns'
     )
 }}
 
-with stg as (
-    select *
-    from {{ ref('stg_binance_klines_1s') }}
+WITH stg AS (
+    SELECT *
+    FROM {{ ref('stg_binance_klines_1s') }}
+    {% if is_incremental() %}
+    -- Lookback buffer of 600 seconds (10 minutes) ensures rolling indicators
+    -- (60s realized volatility and 300s moving average) have full warm-up context
+    WHERE open_time >= (
+        SELECT MAX(open_time) - INTERVAL '600' SECOND
+        FROM {{ this }}
+    )
+    {% endif %}
 ),
 
-base_metrics AS(
+base_metrics AS (
     SELECT
-    open_time,
-    open_price AS open,
-    high_price AS high,
-    low_price AS low,
-    close_price AS close,
-    base_asset_volume AS volume,
-    quote_asset_volume,
-    number_of_trades,
-    taker_buy_base_asset_volume,
-    CAST(base_asset_volume - taker_buy_base_asset_volume AS DECIMAL(18,8)) AS taker_sell_base_asset_volume,
-    taker_buy_quote_asset_volume,
-    CAST(quote_asset_volume - taker_buy_quote_asset_volume AS DECIMAL(18,8)) AS taker_sell_quote_asset_volume,
-    CAST(high_price - low_price AS DECIMAL(18,8)) AS candle_spread,
-    CASE
-        WHEN number_of_trades > 0 THEN CAST(base_asset_volume / CAST(number_of_trades AS DECIMAL(18,8)) AS DECIMAL(18,8))
-        ELSE CAST(0 AS DECIMAL(18,8))
-    END AS avg_trade_size,
-    CASE
-        WHEN base_asset_volume > 0 THEN CAST((taker_buy_base_asset_volume - (base_asset_volume - taker_buy_base_asset_volume)) / base_asset_volume AS DECIMAL(18, 8))
-        ELSE CAST(0 AS DECIMAL(18,8))
-    END AS buy_sell_imbalance,
-    LAG(close_price,1) OVER (ORDER BY open_time) AS prev_close
+        open_time,
+        open_price AS open,
+        high_price AS high,
+        low_price AS low,
+        close_price AS close,
+        base_asset_volume AS volume,
+        quote_asset_volume,
+        number_of_trades,
+        taker_buy_base_asset_volume,
+        CAST(base_asset_volume - taker_buy_base_asset_volume AS DECIMAL(18, 8)) AS taker_sell_base_asset_volume,
+        taker_buy_quote_asset_volume,
+        CAST(quote_asset_volume - taker_buy_quote_asset_volume AS DECIMAL(18, 8)) AS taker_sell_quote_asset_volume,
+        CAST(high_price - low_price AS DECIMAL(18, 8)) AS candle_spread,
+        CASE
+            WHEN number_of_trades > 0 THEN CAST(base_asset_volume / CAST(number_of_trades AS DECIMAL(18, 8)) AS DECIMAL(18, 8))
+            ELSE CAST(0 AS DECIMAL(18, 8))
+        END AS avg_trade_size,
+        CASE
+            WHEN base_asset_volume > 0 THEN CAST((taker_buy_base_asset_volume - (base_asset_volume - taker_buy_base_asset_volume)) / base_asset_volume AS DECIMAL(18, 8))
+            ELSE CAST(0 AS DECIMAL(18, 8))
+        END AS buy_sell_imbalance,
+        LAG(close_price, 1) OVER (ORDER BY open_time) AS prev_close
     FROM stg
 ),
 
 calculated_returns AS (
     SELECT
         *,
+        -- DECIMAL division preserves precision; DOUBLE is isolated strictly to the transcendental LN() boundary
         CASE
             WHEN prev_close IS NOT NULL AND prev_close > 0 AND close > 0
-                THEN CAST(LN(CAST(close AS DOUBLE) / CAST(prev_close AS DOUBLE)) AS DECIMAL(18, 8))
+                THEN CAST(LN(CAST(close / prev_close AS DOUBLE)) AS DECIMAL(18, 8))
             ELSE CAST(0 AS DECIMAL(18, 8))
         END AS log_return,
         CASE WHEN close > prev_close THEN close - prev_close ELSE CAST(0 AS DECIMAL(18, 8)) END AS price_gain,
@@ -53,15 +65,12 @@ calculated_returns AS (
 rolling_indicators AS (
     SELECT
         *,
-        CAST(SQRT(SUM(POW(CAST(log_return AS DOUBLE), 2)) OVER (
+        -- Log return squaring and window summation are purely DECIMAL; DOUBLE is isolated strictly to SQRT()
+        CAST(SQRT(CAST(SUM(log_return * log_return) OVER (
             ORDER BY open_time ROWS BETWEEN 59 PRECEDING AND CURRENT ROW
-        )) AS DECIMAL(18, 8)) AS realized_volatility_60s,
+        ) AS DOUBLE)) AS DECIMAL(18, 8)) AS realized_volatility_60s,
         AVG(price_gain) OVER (ORDER BY open_time ROWS BETWEEN 13 PRECEDING AND CURRENT ROW) AS avg_gain_14,
-        AVG(price_loss) OVER (ORDER BY open_time ROWS BETWEEN 13 PRECEDING AND CURRENT ROW) AS avg_loss_14,
-        CAST(
-            SUM(close * volume) OVER (ORDER BY open_time ROWS BETWEEN 59 PRECEDING AND CURRENT ROW)
-            / NULLIF(SUM(volume) OVER (ORDER BY open_time ROWS BETWEEN 59 PRECEDING AND CURRENT ROW), 0)
-        AS DECIMAL(18, 8)) AS vwap_60s
+        AVG(price_loss) OVER (ORDER BY open_time ROWS BETWEEN 13 PRECEDING AND CURRENT ROW) AS avg_loss_14
     FROM calculated_returns
 ),
 
@@ -69,11 +78,18 @@ vol_ma_step AS (
     SELECT
         *,
         AVG(realized_volatility_60s) OVER (ORDER BY open_time ROWS BETWEEN 299 PRECEDING AND CURRENT ROW) AS ma_vol_300s,
+        -- RSI is calculated entirely in DECIMAL arithmetic to prevent floating-point drift
         CASE
             WHEN avg_loss_14 = 0 AND avg_gain_14 = 0 THEN CAST(50 AS DECIMAL(18, 8))
             WHEN avg_loss_14 = 0 THEN CAST(100 AS DECIMAL(18, 8))
             WHEN avg_gain_14 = 0 THEN CAST(0 AS DECIMAL(18, 8))
-            ELSE CAST(100.0 - (100.0 / (1.0 + (CAST(avg_gain_14 AS DOUBLE) / CAST(avg_loss_14 AS DOUBLE)))) AS DECIMAL(18, 8))
+            ELSE CAST(
+                CAST(100 AS DECIMAL(18, 8)) - (
+                    CAST(100 AS DECIMAL(18, 8)) / (
+                        CAST(1 AS DECIMAL(18, 8)) + (avg_gain_14 / avg_loss_14)
+                    )
+                ) AS DECIMAL(18, 8)
+            )
         END AS rsi_14_sec
     FROM rolling_indicators
 ),
@@ -143,8 +159,7 @@ SELECT
     f.avg_trade_size,
     f.buy_sell_imbalance,
     f.rsi_14_sec,
-    f.realized_volatility_60s,
-    f.vwap_60s
+    f.realized_volatility_60s
 FROM regime_categories f
 INNER JOIN {{ ref('dim_market_regime') }} dmr
     ON dmr.rsi_regime = f.rsi_regime
@@ -153,3 +168,10 @@ INNER JOIN {{ ref('dim_market_regime') }} dmr
    AND dmr.spread_category = f.spread_category
    AND dmr.is_volatility_spike = f.is_volatility_spike
    AND dmr.extreme_wick_flag = f.extreme_wick_flag
+{% if is_incremental() %}
+-- Refresh the 300-second warm-up boundary and insert all new records
+WHERE f.open_time >= (
+    SELECT MAX(open_time) - INTERVAL '300' SECOND
+    FROM {{ this }}
+)
+{% endif %}
