@@ -60,13 +60,6 @@ metrics:
     type_params:
       measure: min_low_price
 
-  - name: average_vwap_60s
-    label: "Volume-Weighted Average Price (60s)"
-    description: "Average 60-second rolling Volume-Weighted Average Price."
-    type: simple
-    type_params:
-      measure: vwap_60s
-
   - name: taker_buy_volume_btc
     label: "Taker Buy Volume (BTC)"
     description: "Base asset volume bought by market takers executing against asks."

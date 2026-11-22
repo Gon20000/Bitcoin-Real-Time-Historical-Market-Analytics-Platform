@@ -52,9 +52,6 @@ def test_dbt_model_naming_and_guardrails():
         "is_incremental()" in content
     ), "Fact model fct_btc_klines_1s must support incremental lookback logic"
     assert (
-        "vwap_60s" in content
-    ), "Fact model fct_btc_klines_1s must expose required vwap_60s feature"
-    assert (
         "date_parse(cast(max(fact_key) as varchar), '%y%m%d%h%i%s')" in content
     ), "Fact model fct_btc_klines_1s must derive watermark from fact_key"
 
@@ -94,4 +91,3 @@ def test_dbt_semantic_layer_configuration():
     assert "taker_sell_volume_btc" in metric_names
     assert "taker_buy_volume_usd" in metric_names
     assert "taker_sell_volume_usd" in metric_names
-    assert "average_vwap_60s" in metric_names

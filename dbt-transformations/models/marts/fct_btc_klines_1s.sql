@@ -69,12 +69,7 @@ rolling_indicators AS (
             ORDER BY open_time ROWS BETWEEN 59 PRECEDING AND CURRENT ROW
         ) AS DOUBLE)) AS DECIMAL(18, 8)) AS realized_volatility_60s,
         AVG(price_gain) OVER (ORDER BY open_time ROWS BETWEEN 13 PRECEDING AND CURRENT ROW) AS avg_gain_14,
-        AVG(price_loss) OVER (ORDER BY open_time ROWS BETWEEN 13 PRECEDING AND CURRENT ROW) AS avg_loss_14,
-        -- VWAP calculated via decimal arithmetic over rolling 60-second window
-        CAST(
-            SUM(close * volume) OVER (ORDER BY open_time ROWS BETWEEN 59 PRECEDING AND CURRENT ROW)
-            / NULLIF(SUM(volume) OVER (ORDER BY open_time ROWS BETWEEN 59 PRECEDING AND CURRENT ROW), 0)
-        AS DECIMAL(18, 8)) AS vwap_60s
+        AVG(price_loss) OVER (ORDER BY open_time ROWS BETWEEN 13 PRECEDING AND CURRENT ROW) AS avg_loss_14
     FROM calculated_returns
 ),
 
@@ -163,8 +158,7 @@ SELECT
     f.avg_trade_size,
     f.buy_sell_imbalance,
     f.rsi_14_sec,
-    f.realized_volatility_60s,
-    f.vwap_60s
+    f.realized_volatility_60s
 FROM regime_categories f
 INNER JOIN {{ ref('dim_market_regime') }} dmr
     ON dmr.rsi_regime = f.rsi_regime
