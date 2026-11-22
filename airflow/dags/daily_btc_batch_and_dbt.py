@@ -8,6 +8,7 @@ Guardrails: Verb-first task IDs, UTC timezone alignment, PEP 8 compliance.
 from __future__ import annotations
 
 import os
+import subprocess
 from datetime import datetime, timedelta
 
 from airflow.operators.bash import BashOperator
@@ -53,6 +54,59 @@ def log_pipeline_start() -> None:
     )
 
 
+def register_silver_delta_table() -> None:
+    """Ensure schemas exist and register physical Silver Delta table in Trino catalog."""
+    try:
+        from trino import dbapi
+
+        conn = dbapi.connect(
+            host=os.getenv("TRINO_HOST", "trino"),
+            port=int(os.getenv("TRINO_PORT", "8080")),
+            user="admin",
+            catalog="delta",
+            schema="default",
+        )
+        cur = conn.cursor()
+        cur.execute("CREATE SCHEMA IF NOT EXISTS delta.silver")
+        cur.execute("CREATE SCHEMA IF NOT EXISTS delta.gold")
+        cur.execute("SHOW TABLES FROM delta.silver LIKE 'binance_klines_1s'")
+        if not cur.fetchall():
+            cur.execute(
+                "CALL delta.system.register_table("
+                "schema_name => 'silver', "
+                "table_name => 'binance_klines_1s', "
+                "table_location => '/opt/spark/data/silver/stg_binance_klines_1s')"
+            )
+            print("Registered delta.silver.binance_klines_1s in Trino catalog.")
+        else:
+            print(
+                "Table delta.silver.binance_klines_1s is already registered in Trino."
+            )
+        cur.close()
+        conn.close()
+    except ImportError:
+        # Fallback to invoking python in dbt_venv where trino dbapi is guaranteed
+        cmd = [
+            "/opt/airflow/dbt_venv/bin/python",
+            "-c",
+            (
+                "from trino import dbapi; "
+                "conn = dbapi.connect(host='trino', port=8080, user='admin', catalog='delta', schema='default'); "
+                "cur = conn.cursor(); "
+                "cur.execute('CREATE SCHEMA IF NOT EXISTS delta.silver'); "
+                "cur.execute('CREATE SCHEMA IF NOT EXISTS delta.gold'); "
+                "cur.execute(\"SHOW TABLES FROM delta.silver LIKE 'binance_klines_1s'\"); "
+                "if not cur.fetchall(): "
+                "    cur.execute(\"CALL delta.system.register_table(schema_name => 'silver', table_name => 'binance_klines_1s', table_location => '/opt/spark/data/silver/stg_binance_klines_1s')\"); "
+                "    print('Registered delta.silver.binance_klines_1s in Trino catalog.'); "
+                "else: "
+                "    print('Table delta.silver.binance_klines_1s is already registered in Trino.'); "
+                "cur.close(); conn.close();"
+            ),
+        ]
+        subprocess.check_call(cmd)
+
+
 with DAG(
     dag_id="daily_btc_batch_and_dbt",
     default_args=default_args,
@@ -83,10 +137,18 @@ with DAG(
             "--conf spark.sql.catalog.spark_catalog=org.apache.spark.sql.delta.catalog.DeltaCatalog "
             "--conf spark.sql.session.timeZone=UTC "
             "/opt/airflow/spark-jobs/batch_historical_ingest.py; "
+            "elif [ -d '/opt/spark/data/silver/stg_binance_klines_1s/_delta_log' ]; then "
+            "echo 'Spark submit client not installed in worker; verified existing Silver Delta Lake table at /opt/spark/data/silver/stg_binance_klines_1s.'; "
             "else "
-            "echo 'Spark cluster active. Silver Delta Lake table verified, proceeding with downstream dbt transformations.'; "
+            "echo 'ERROR: spark-submit is unavailable and Silver Delta table does not exist at /opt/spark/data/silver/stg_binance_klines_1s. Cannot proceed.' >&2; "
+            "exit 1; "
             "fi"
         ),
+    )
+
+    register_trino_silver_table = PythonOperator(
+        task_id="register_trino_silver_table",
+        python_callable=register_silver_delta_table,
     )
 
     if COSMOS_AVAILABLE:
@@ -145,6 +207,7 @@ with DAG(
         start_pipeline
         >> emit_pipeline_start_log
         >> trigger_spark_historical_ingest
+        >> register_trino_silver_table
         >> transform_dbt_models
         >> validate_gold_metrics
         >> end_pipeline

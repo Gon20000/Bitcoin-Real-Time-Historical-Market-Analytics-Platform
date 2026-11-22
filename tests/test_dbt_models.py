@@ -59,12 +59,23 @@ def test_dbt_semantic_layer_configuration():
         metrics_config = yaml.safe_load(f)
 
     assert "semantic_models" in semantic_config
-    assert len(semantic_config["semantic_models"]) >= 3
+    assert len(semantic_config["semantic_models"]) >= 6
 
     semantic_model_names = {sm["name"] for sm in semantic_config["semantic_models"]}
     assert "btc_klines_1s" in semantic_model_names
     assert "dim_date" in semantic_model_names
+    assert "dim_date_cairo" in semantic_model_names
+    assert "dim_time" in semantic_model_names
+    assert "dim_time_cairo" in semantic_model_names
     assert "dim_market_regime" in semantic_model_names
 
     assert "metrics" in metrics_config
-    assert len(metrics_config["metrics"]) >= 5
+    assert len(metrics_config["metrics"]) >= 10
+    metric_names = {m["name"] for m in metrics_config["metrics"]}
+    assert "net_taker_volume_flow_btc" in metric_names
+    assert "net_taker_volume_flow_usd" in metric_names
+    assert "period_price_range" in metric_names
+    assert "taker_buy_volume_btc" in metric_names
+    assert "taker_sell_volume_btc" in metric_names
+    assert "taker_buy_volume_usd" in metric_names
+    assert "taker_sell_volume_usd" in metric_names

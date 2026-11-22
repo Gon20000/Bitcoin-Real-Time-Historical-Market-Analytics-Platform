@@ -121,9 +121,9 @@ SELECT
     -- 1. Keys (Surrogate & Foreign Keys)
     CAST(DATE_FORMAT(f.open_time, '%Y%m%d%H%i%s') AS BIGINT) AS fact_key,
     CAST(DATE_FORMAT(f.open_time, '%Y%m%d') AS INTEGER) AS date_utc_key,
-    CAST(DATE_FORMAT(f.open_time AT TIME ZONE 'Africa/Cairo', '%Y%m%d') AS INTEGER) AS date_eg_key,
+    CAST(DATE_FORMAT(WITH_TIMEZONE(f.open_time, 'UTC') AT TIME ZONE 'Africa/Cairo', '%Y%m%d') AS INTEGER) AS date_eg_key,
     CAST(DATE_FORMAT(f.open_time, '%H%i%s') AS INTEGER) AS time_utc_key,
-    CAST(DATE_FORMAT(f.open_time AT TIME ZONE 'Africa/Cairo', '%H%i%s') AS INTEGER) AS time_eg_key,
+    CAST(DATE_FORMAT(WITH_TIMEZONE(f.open_time, 'UTC') AT TIME ZONE 'Africa/Cairo', '%H%i%s') AS INTEGER) AS time_eg_key,
     dmr.market_regime_key,
     -- 2. Core OHLCV Metrics
     f.open,

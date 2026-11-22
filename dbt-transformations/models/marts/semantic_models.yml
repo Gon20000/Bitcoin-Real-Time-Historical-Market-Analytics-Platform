@@ -95,11 +95,11 @@ semantic_models:
         agg: average
 
   # =========================================================================
-  # 2. Date Dimension Semantic Model (dim_date)
+  # 2. Date Dimension Semantic Model (dim_date - UTC)
   # =========================================================================
   - name: dim_date
     model: ref('dim_date')
-    description: "Date dimension supporting temporal aggregations."
+    description: "Date dimension supporting temporal aggregations in UTC."
 
     entities:
       - name: date_utc
@@ -128,7 +128,100 @@ semantic_models:
         type: categorical
 
   # =========================================================================
-  # 3. Market Regime Dimension Semantic Model (dim_market_regime)
+  # 3. Role-Playing Date Dimension Semantic Model (dim_date - Cairo)
+  # =========================================================================
+  - name: dim_date_cairo
+    model: ref('dim_date')
+    description: "Role-playing date dimension supporting temporal aggregations in Cairo local time."
+
+    entities:
+      - name: date_eg
+        type: primary
+        expr: date_key
+
+    dimensions:
+      - name: cairo_calendar_date
+        type: time
+        expr: calendar_date
+        type_params:
+          time_granularity: day
+
+      - name: cairo_day_of_week
+        type: categorical
+        expr: day_of_week
+
+      - name: cairo_month_name
+        type: categorical
+        expr: month_name
+
+      - name: cairo_quarter
+        type: categorical
+        expr: quarter
+
+      - name: cairo_year
+        type: categorical
+        expr: year
+
+      - name: cairo_is_weekend
+        type: categorical
+        expr: is_weekend
+
+  # =========================================================================
+  # 4. Time Dimension Semantic Model (dim_time - UTC)
+  # =========================================================================
+  - name: dim_time
+    model: ref('dim_time')
+    description: "Time dimension supporting second-level intra-day aggregations in UTC."
+
+    entities:
+      - name: time_utc
+        type: primary
+        expr: time_key
+
+    dimensions:
+      - name: time_of_day
+        type: categorical
+
+      - name: hour_of_day
+        type: categorical
+
+      - name: minute_of_hour
+        type: categorical
+
+      - name: second_of_minute
+        type: categorical
+
+  # =========================================================================
+  # 5. Role-Playing Time Dimension Semantic Model (dim_time - Cairo)
+  # =========================================================================
+  - name: dim_time_cairo
+    model: ref('dim_time')
+    description: "Role-playing time dimension supporting second-level aggregations in Cairo local time."
+
+    entities:
+      - name: time_eg
+        type: primary
+        expr: time_key
+
+    dimensions:
+      - name: cairo_time_of_day
+        type: categorical
+        expr: time_of_day
+
+      - name: cairo_hour_of_day
+        type: categorical
+        expr: hour_of_day
+
+      - name: cairo_minute_of_hour
+        type: categorical
+        expr: minute_of_hour
+
+      - name: cairo_second_of_minute
+        type: categorical
+        expr: second_of_minute
+
+  # =========================================================================
+  # 6. Market Regime Dimension Semantic Model (dim_market_regime)
   # =========================================================================
   - name: dim_market_regime
     model: ref('dim_market_regime')

@@ -60,6 +60,34 @@ metrics:
     type_params:
       measure: min_low_price
 
+  - name: taker_buy_volume_btc
+    label: "Taker Buy Volume (BTC)"
+    description: "Base asset volume bought by market takers executing against asks."
+    type: simple
+    type_params:
+      measure: taker_buy_volume_btc
+
+  - name: taker_sell_volume_btc
+    label: "Taker Sell Volume (BTC)"
+    description: "Base asset volume sold by market takers executing against bids."
+    type: simple
+    type_params:
+      measure: taker_sell_volume_btc
+
+  - name: taker_buy_volume_usd
+    label: "Taker Buy Volume (USDT)"
+    description: "Quote asset volume spent by market takers."
+    type: simple
+    type_params:
+      measure: taker_buy_volume_usd
+
+  - name: taker_sell_volume_usd
+    label: "Taker Sell Volume (USDT)"
+    description: "Quote asset volume received by market takers."
+    type: simple
+    type_params:
+      measure: taker_sell_volume_usd
+
   # =========================================================================
   # Derived Metrics (Calculated combinations across measures/metrics)
   # =========================================================================
@@ -88,7 +116,7 @@ metrics:
     description: "The price range span (Max High minus Min Low) across the selected interval."
     type: derived
     type_params:
-      expr: max_high_price - min_low_price
+      expr: period_max_high_price - period_min_low_price
       metrics:
         - name: period_max_high_price
         - name: period_min_low_price

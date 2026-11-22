@@ -27,3 +27,19 @@ def test_airflow_dag_naming_convention():
     assert (
         'dag_id="daily_btc_batch_and_dbt"' in content
     ), "DAG ID does not adhere to naming conventions"
+
+
+def test_airflow_dag_silver_registration_and_fail_fast():
+    """Verify DAG handles silver table registration and fails fast if spark/delta are missing."""
+    dag_path = Path("airflow/dags/daily_btc_batch_and_dbt.py")
+    content = dag_path.read_text(encoding="utf-8")
+
+    assert (
+        'task_id="register_trino_silver_table"' in content
+    ), "DAG must include register_trino_silver_table task"
+    assert (
+        "exit 1" in content
+    ), "DAG trigger_spark_historical_ingest must exit 1 when Spark and Silver Delta table are unavailable"
+    assert (
+        "register_silver_delta_table" in content
+    ), "DAG must define register_silver_delta_table function"
