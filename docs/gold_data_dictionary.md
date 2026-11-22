@@ -82,3 +82,4 @@ The Gold Layer is the business-level data representation, structured to support 
 | buy_sell_imbalance              | DECIMAL(18, 8)   | The order flow imbalance ratio between taker buy and taker sell volumes (e.g., 0.17241379).   |
 | rsi_14_sec                      | DECIMAL(18, 8)   | The Relative Strength Index calculated over a 14-second rolling window (e.g., 58.45000000).   |
 | realized_volatility_60s         | DECIMAL(18, 8)   | The rolling realized volatility of 1-second log returns over 60 seconds (e.g., 0.00421000).   |
+| vwap_60s                        | DECIMAL(18, 8)   | The 60-second rolling Volume-Weighted Average Price in USDT (e.g., 65002.35000000).          |

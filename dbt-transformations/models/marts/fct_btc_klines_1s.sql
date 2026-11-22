@@ -12,10 +12,9 @@ WITH stg AS (
     SELECT *
     FROM {{ ref('stg_binance_klines_1s') }}
     {% if is_incremental() %}
-    -- Lookback buffer of 600 seconds (10 minutes) ensures rolling indicators
-    -- (60s realized volatility and 300s moving average) have full warm-up context
+    -- Lookback buffer of 600 seconds derived from existing fact_key watermark in {{ this }}
     WHERE open_time >= (
-        SELECT MAX(open_time) - INTERVAL '600' SECOND
+        SELECT DATE_PARSE(CAST(MAX(fact_key) AS VARCHAR), '%Y%m%d%H%i%s') - INTERVAL '600' SECOND
         FROM {{ this }}
     )
     {% endif %}
@@ -70,7 +69,12 @@ rolling_indicators AS (
             ORDER BY open_time ROWS BETWEEN 59 PRECEDING AND CURRENT ROW
         ) AS DOUBLE)) AS DECIMAL(18, 8)) AS realized_volatility_60s,
         AVG(price_gain) OVER (ORDER BY open_time ROWS BETWEEN 13 PRECEDING AND CURRENT ROW) AS avg_gain_14,
-        AVG(price_loss) OVER (ORDER BY open_time ROWS BETWEEN 13 PRECEDING AND CURRENT ROW) AS avg_loss_14
+        AVG(price_loss) OVER (ORDER BY open_time ROWS BETWEEN 13 PRECEDING AND CURRENT ROW) AS avg_loss_14,
+        -- VWAP calculated via decimal arithmetic over rolling 60-second window
+        CAST(
+            SUM(close * volume) OVER (ORDER BY open_time ROWS BETWEEN 59 PRECEDING AND CURRENT ROW)
+            / NULLIF(SUM(volume) OVER (ORDER BY open_time ROWS BETWEEN 59 PRECEDING AND CURRENT ROW), 0)
+        AS DECIMAL(18, 8)) AS vwap_60s
     FROM calculated_returns
 ),
 
@@ -159,7 +163,8 @@ SELECT
     f.avg_trade_size,
     f.buy_sell_imbalance,
     f.rsi_14_sec,
-    f.realized_volatility_60s
+    f.realized_volatility_60s,
+    f.vwap_60s
 FROM regime_categories f
 INNER JOIN {{ ref('dim_market_regime') }} dmr
     ON dmr.rsi_regime = f.rsi_regime
@@ -169,9 +174,9 @@ INNER JOIN {{ ref('dim_market_regime') }} dmr
    AND dmr.is_volatility_spike = f.is_volatility_spike
    AND dmr.extreme_wick_flag = f.extreme_wick_flag
 {% if is_incremental() %}
--- Refresh the 300-second warm-up boundary and insert all new records
+-- Refresh the 300-second warm-up boundary and insert all new records derived from fact_key watermark
 WHERE f.open_time >= (
-    SELECT MAX(open_time) - INTERVAL '300' SECOND
+    SELECT DATE_PARSE(CAST(MAX(fact_key) AS VARCHAR), '%Y%m%d%H%i%s') - INTERVAL '300' SECOND
     FROM {{ this }}
 )
 {% endif %}

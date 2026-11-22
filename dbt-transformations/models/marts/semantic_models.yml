@@ -94,6 +94,11 @@ semantic_models:
         expr: buy_sell_imbalance
         agg: average
 
+      - name: vwap_60s
+        description: "Volume-Weighted Average Price over rolling 60 seconds in USDT."
+        expr: vwap_60s
+        agg: average
+
   # =========================================================================
   # 2. Date Dimension Semantic Model (dim_date - UTC)
   # =========================================================================

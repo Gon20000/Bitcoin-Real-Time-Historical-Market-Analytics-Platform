@@ -30,7 +30,7 @@ def test_airflow_dag_naming_convention():
 
 
 def test_airflow_dag_silver_registration_and_fail_fast():
-    """Verify DAG handles silver table registration and fails fast if spark/delta are missing."""
+    """Verify DAG handles silver table registration and fails fast if spark is unavailable."""
     dag_path = Path("airflow/dags/daily_btc_batch_and_dbt.py")
     content = dag_path.read_text(encoding="utf-8")
 
@@ -39,7 +39,16 @@ def test_airflow_dag_silver_registration_and_fail_fast():
     ), "DAG must include register_trino_silver_table task"
     assert (
         "exit 1" in content
-    ), "DAG trigger_spark_historical_ingest must exit 1 when Spark and Silver Delta table are unavailable"
+    ), "DAG trigger_spark_historical_ingest must exit 1 when Spark is unavailable"
     assert (
         "register_silver_delta_table" in content
     ), "DAG must define register_silver_delta_table function"
+
+
+def test_airflow_dag_scripts_exist():
+    """Verify dedicated helper scripts referenced by DAG tasks exist and have valid syntax."""
+    script_path = Path("airflow/dags/scripts/register_trino_silver.py")
+    assert script_path.exists(), "register_trino_silver.py helper script not found"
+    content = script_path.read_text(encoding="utf-8")
+    parsed = ast.parse(content, filename=str(script_path))
+    assert parsed is not None, "Failed to parse register_trino_silver.py"

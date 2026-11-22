@@ -85,25 +85,11 @@ def register_silver_delta_table() -> None:
         cur.close()
         conn.close()
     except ImportError:
-        # Fallback to invoking python in dbt_venv where trino dbapi is guaranteed
-        cmd = [
-            "/opt/airflow/dbt_venv/bin/python",
-            "-c",
-            (
-                "from trino import dbapi; "
-                "conn = dbapi.connect(host='trino', port=8080, user='admin', catalog='delta', schema='default'); "
-                "cur = conn.cursor(); "
-                "cur.execute('CREATE SCHEMA IF NOT EXISTS delta.silver'); "
-                "cur.execute('CREATE SCHEMA IF NOT EXISTS delta.gold'); "
-                "cur.execute(\"SHOW TABLES FROM delta.silver LIKE 'binance_klines_1s'\"); "
-                "if not cur.fetchall(): "
-                "    cur.execute(\"CALL delta.system.register_table(schema_name => 'silver', table_name => 'binance_klines_1s', table_location => '/opt/spark/data/silver/stg_binance_klines_1s')\"); "
-                "    print('Registered delta.silver.binance_klines_1s in Trino catalog.'); "
-                "else: "
-                "    print('Table delta.silver.binance_klines_1s is already registered in Trino.'); "
-                "cur.close(); conn.close();"
-            ),
-        ]
+        # Fallback to invoking the dedicated registration script in dbt_venv where trino is installed
+        script_path = os.path.join(
+            os.path.dirname(__file__), "scripts", "register_trino_silver.py"
+        )
+        cmd = ["/opt/airflow/dbt_venv/bin/python", script_path]
         subprocess.check_call(cmd)
 
 
@@ -137,10 +123,8 @@ with DAG(
             "--conf spark.sql.catalog.spark_catalog=org.apache.spark.sql.delta.catalog.DeltaCatalog "
             "--conf spark.sql.session.timeZone=UTC "
             "/opt/airflow/spark-jobs/batch_historical_ingest.py; "
-            "elif [ -d '/opt/spark/data/silver/stg_binance_klines_1s/_delta_log' ]; then "
-            "echo 'Spark submit client not installed in worker; verified existing Silver Delta Lake table at /opt/spark/data/silver/stg_binance_klines_1s.'; "
             "else "
-            "echo 'ERROR: spark-submit is unavailable and Silver Delta table does not exist at /opt/spark/data/silver/stg_binance_klines_1s. Cannot proceed.' >&2; "
+            "echo 'ERROR: /opt/spark/bin/spark-submit client not found. Cannot submit batch historical ingest.' >&2; "
             "exit 1; "
             "fi"
         ),

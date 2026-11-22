@@ -16,6 +16,11 @@ RUN apt-get update && \
 ENV JAVA_HOME=/usr/lib/jvm/java-17-openjdk-amd64
 ENV PATH="${JAVA_HOME}/bin:${PATH}"
 
+# Copy Spark binaries from official ASF Spark image for spark-submit client capability
+COPY --from=apache/spark:3.5.0 --chown=airflow:root /opt/spark /opt/spark
+ENV SPARK_HOME=/opt/spark
+ENV PATH="${SPARK_HOME}/bin:${PATH}"
+
 USER airflow
 
 # Copy requirements file
