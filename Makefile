@@ -27,7 +27,7 @@ help:
 init:
 	@if [ ! -f .env ]; then cp .env.example .env && echo "Created .env from .env.example"; fi
 	mkdir -p data/bronze data/silver data/gold data/checkpoints
-	mkdir -p airflow/logs trino/etc/catalog
+	mkdir -p airflow/dags airflow/logs airflow/plugins airflow/config trino/etc/catalog
 	@echo "Local Medallion data lake directories initialized."
 	pip install -r requirements-dev.txt
 	pre-commit install
@@ -44,6 +44,9 @@ up-stream:
 	docker compose --profile streaming up -d
 
 up-orch:
+	@echo "Setting open permissions for Docker volumes..."
+	chmod -R 777 airflow/dags airflow/logs airflow/plugins airflow/config
+	@echo "Starting orchestration layer..."
 	docker compose --profile orchestration up -d
 
 up-analytics:

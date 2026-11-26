@@ -1,13 +1,13 @@
-FROM apache/airflow:2.8.1-python3.11
+FROM apache/airflow:2.10.2-python3.11
 
 USER root
 
 # Install OpenJDK-17 (Required for PySpark / SparkSubmitOperator) and git
 RUN apt-get update && \
     apt-get install -y --no-install-recommends \
-        openjdk-17-jre-headless \
-        git \
-        curl && \
+    openjdk-17-jre-headless \
+    git \
+    curl && \
     apt-get autoremove -yqq --purge && \
     apt-get clean && \
     rm -rf /var/lib/apt/lists/*
@@ -27,11 +27,12 @@ RUN pip install --no-cache-dir --upgrade pip && \
 
 # 2. Create an isolated virtual environment for dbt-trino & MetricFlow (Cosmos best practice)
 RUN python -m venv /opt/airflow/dbt_venv && \
+    export PIP_USER=false && \
     /opt/airflow/dbt_venv/bin/pip install --no-cache-dir --upgrade pip && \
     /opt/airflow/dbt_venv/bin/pip install --no-cache-dir \
-        dbt-core>=1.7.0,<1.8.0 \
-        dbt-trino>=1.7.0,<1.8.0 \
-        dbt-metricflow
+        "dbt-core>=1.7.0,<1.8.0" \
+        "dbt-trino>=1.7.0,<1.8.0" \
+        "dbt-metricflow"
 
 # Add the dbt virtualenv to PATH so `dbt` CLI commands work directly in dbt-workspace
 ENV PATH="/opt/airflow/dbt_venv/bin:${PATH}"
