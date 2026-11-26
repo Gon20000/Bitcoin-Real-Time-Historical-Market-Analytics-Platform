@@ -1,7 +1,8 @@
 """Unit tests for the Binance BTCUSDT historical-download Airflow DAG.
 
 Run from the project root:
-    docker compose exec airflow-scheduler python -m pytest /opt/airflow/dags/tests/test_dag_btc.py -v
+    make test
+    # or: pytest tests/batch/test_dag_btc.py -v
 
 These tests mock network access and use temporary directories. They do not contact
 Binance or write to the project's real data directory.
@@ -23,9 +24,7 @@ def _find_dag_file():
     """Locate DAG-BTC.py when this test is run from the repository or container."""
     here = Path(__file__).resolve()
     candidates = [
-        here.parents[1] / "DAG-BTC.py",
-        here.parents[2] / "dags" / "DAG-BTC.py",
-        here.parents[3] / "airflow" / "dags" / "DAG-BTC.py",
+        here.parents[2] / "airflow" / "dags" / "DAG-BTC.py",
         Path.cwd() / "airflow" / "dags" / "DAG-BTC.py",
         Path.cwd() / "dags" / "DAG-BTC.py",
     ]
@@ -89,7 +88,7 @@ def test_dag_configuration_and_tasks(dag_module):
     downloader = dag.get_task("download_archive")
 
     assert generator.python_callable is dag_module.generate_file_list
-    # In Airflow 2.8.1, a dynamically mapped PythonOperator is a
+    # In Airflow 2.10.2, a dynamically mapped PythonOperator is a
     # MappedOperator. Its original operator arguments are in partial_kwargs.
     assert downloader.partial_kwargs["python_callable"] is dag_module.download_archive
     assert downloader.__class__.__name__ == "MappedOperator"
