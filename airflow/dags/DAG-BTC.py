@@ -11,23 +11,9 @@ from airflow import DAG
 from airflow.models.param import Param
 from airflow.operators.python import PythonOperator, get_current_context
 
-
-# ----------------------------------------------------------------------------
-# LOGGING CONFIGURATION
-# ----------------------------------------------------------------------------
-
-LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO").upper()
-
-logging.basicConfig(
-    level=getattr(logging, LOG_LEVEL, logging.INFO),
-    format="%(asctime)s - %(levelname)s - %(message)s",
-)
-
 logger = logging.getLogger(__name__)
 
-
-DATA_DIR = Path("/opt/airflow/data/bronze/historical")
-
+DATA_DIR = Path(os.getenv("HISTORICAL_DATA_DIR", "/opt/spark/data/bronze/historical"))
 SYMBOL = "BTCUSDT"
 INTERVAL = "1s"
 
@@ -221,7 +207,7 @@ with DAG(
         "BTCUSDT 1-second archives"
     ),
     start_date=pendulum.datetime(2026, 1, 1, tz="UTC"),
-    schedule=timedelta(minutes=1),
+    schedule=timedelta(minutes=1),  # to be discussed
     catchup=False,
     max_active_runs=1,
     default_args={
@@ -250,4 +236,5 @@ with DAG(
     download_tasks = PythonOperator.partial(
         task_id="download_archive",
         python_callable=download_archive,
+        max_active_tis_per_dag=4,
     ).expand(op_kwargs=file_list.output)
