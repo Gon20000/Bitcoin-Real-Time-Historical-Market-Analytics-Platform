@@ -65,18 +65,52 @@ services:
       # Topic & Retention Specifications (3 Partitions, 24-Hour Retention)
       - KAFKA_NUM_PARTITIONS=3
       - KAFKA_LOG_RETENTION_HOURS=24
-      - KAFKA_AUTO_CREATE_TOPICS_ENABLE=true
+      - KAFKA_AUTO_CREATE_TOPICS_ENABLE=false # Disable auto-creation of topics for better control
       - KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR=1
       - KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR=1
       - KAFKA_TRANSACTION_STATE_LOG_MIN_ISR=1
+      - KAFKA_LOG_DIRS=/var/lib/kafka/data
+      # - KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS=0  # Avoids 3s delay when test consumers join
     volumes:
       # Official ASF image uses /var/lib/kafka/data instead of /bitnami/kafka
       - kafka_data:/var/lib/kafka/data
     healthcheck:
-      test: ["CMD", "/opt/kafka/bin/kafka-topics.sh", "--bootstrap-server", "localhost:29092", "--list"]
+      test:
+        [
+          "CMD",
+          "/opt/kafka/bin/kafka-topics.sh",
+          "--bootstrap-server",
+          "localhost:29092",
+          "--list"
+        ]
       interval: 10s
       timeout: 5s
       retries: 5
+      start_period: 20s
+    networks:
+      - btc-analytics-net
+
+  kafka-init:
+    image: apache/kafka:3.7.0
+    container_name: btc-kafka-init
+    profiles: ["streaming", "full-stack"]
+    depends_on:
+      kafka:
+        condition: service_healthy
+    environment:
+      - KAFKA_TOPIC=${KAFKA_TOPIC:-prod.binance.btc_usdt_1s.v1}
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        set -eu
+        /opt/kafka/bin/kafka-topics.sh --bootstrap-server kafka:29092 \
+          --create --if-not-exists \
+          --topic "$${KAFKA_TOPIC}" \
+          --partitions 3 \
+          --replication-factor 1 \
+          --config retention.ms=86400000
+        /opt/kafka/bin/kafka-topics.sh --bootstrap-server kafka:29092 \
+          --describe --topic "$${KAFKA_TOPIC}"
     networks:
       - btc-analytics-net
 
@@ -95,12 +129,12 @@ services:
     volumes:
       - ./kafka-streaming/producer:/app/producer
     depends_on:
-      kafka:
-        condition: service_healthy
+      kafka-init:
+        condition: service_completed_successfully
     restart: unless-stopped
     networks:
       - btc-analytics-net
-    stop_grace_period: 30s  # Allow time for graceful shutdown and queue draining
+    stop_grace_period: 30s # Allow time for graceful shutdown and queue draining
 
   # ---------------------------------------------------------------------------
   # 2. COMPUTE LAYER (PySpark 3.5 Cluster, Structured Streaming & Batch)
@@ -115,8 +149,8 @@ services:
       - SPARK_RPC_AUTHENTICATION_ENABLED=no
       - SPARK_RPC_ENCRYPTION_ENABLED=no
     ports:
-      - "8081:8080"  # Spark Master Web UI
-      - "7077:7077"  # Spark Master RPC Port
+      - "8081:8080" # Spark Master Web UI
+      - "7077:7077" # Spark Master RPC Port
     healthcheck:
       test: ["CMD-SHELL", "grep -qi ':1F90' /proc/net/tcp /proc/net/tcp6"]
       interval: 10s
@@ -158,8 +192,9 @@ services:
       --conf "spark.sql.session.timeZone=UTC"
       /opt/spark/jobs/stream_bronze_to_silver.py
     depends_on:
-      kafka:
-        condition: service_healthy
+      kafka-init:
+        condition: service_completed_successfully
+
       spark-master:
         condition: service_healthy
     restart: on-failure
@@ -167,7 +202,7 @@ services:
   spark-batch-job:
     <<: *spark-common
     container_name: btc-spark-batch-manual
-    profiles: ["batch"]  # On-demand CLI profile; scheduled runs are triggered by Airflow
+    profiles: ["batch"] # On-demand CLI profile; scheduled runs are triggered by Airflow
     user: root
     command: >
       /opt/spark/bin/spark-submit
@@ -243,7 +278,11 @@ services:
     profiles: ["orchestration", "full-stack"]
     command: scheduler
     healthcheck:
-      test: ["CMD-SHELL", "airflow jobs check --job-type SchedulerJob --hostname \"$${HOSTNAME}\""]
+      test:
+        [
+          "CMD-SHELL",
+          'airflow jobs check --job-type SchedulerJob --hostname "$${HOSTNAME}"',
+        ]
       interval: 30s
       timeout: 10s
       retries: 5
@@ -262,7 +301,7 @@ services:
     container_name: btc-trino-engine
     profiles: ["analytics", "orchestration", "full-stack"]
     ports:
-      - "8082:8080"  # Mapped to 8082 on host to avoid conflict with Airflow (8085) and Spark (8081)
+      - "8082:8080" # Mapped to 8082 on host to avoid conflict with Airflow (8085) and Spark (8081)
     volumes:
       - ./data:/opt/spark/data
       - ./trino/etc/catalog:/etc/trino/catalog
