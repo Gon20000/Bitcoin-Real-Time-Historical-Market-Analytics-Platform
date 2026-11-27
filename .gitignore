@@ -104,3 +104,5 @@ dbt-transformations/logs/
 docs/architecture_diagrams/00_conceptuall_schema.drawio
 docs/architecture_diagrams/01_star_schema.drawio
 *.drawio
+
+dbt-transformations/.user.yml

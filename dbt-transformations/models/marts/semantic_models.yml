@@ -1,0 +1,263 @@
+version: 2
+
+semantic_models:
+  # =========================================================================
+  # 1. Fact Table Semantic Model (fct_btc_klines_1s)
+  # =========================================================================
+  - name: btc_klines_1s
+    model: ref('fct_btc_klines_1s')
+    description: "1-second Bitcoin klines fact table providing high-frequency trading metrics and financial indicators."
+    defaults:
+      agg_time_dimension: candle_time
+
+    entities:
+      - name: candle
+        type: primary
+        expr: fact_key
+      - name: date_utc
+        type: foreign
+        expr: date_utc_key
+      - name: date_eg
+        type: foreign
+        expr: date_eg_key
+      - name: time_utc
+        type: foreign
+        expr: time_utc_key
+      - name: time_eg
+        type: foreign
+        expr: time_eg_key
+      - name: market_regime
+        type: foreign
+        expr: market_regime_key
+
+    dimensions:
+      - name: candle_time
+        type: time
+        expr: DATE_PARSE(CAST(fact_key AS VARCHAR), '%Y%m%d%H%i%s')
+        type_params:
+          time_granularity: day
+
+    measures:
+      - name: total_volume_btc
+        description: "Total traded volume in BTC."
+        expr: volume
+        agg: sum
+
+      - name: total_quote_volume_usd
+        description: "Total traded volume in USDT (USD equivalent)."
+        expr: quote_asset_volume
+        agg: sum
+
+      - name: trade_count
+        description: "Total count of executed trades."
+        expr: number_of_trades
+        agg: sum
+
+      - name: taker_buy_volume_btc
+        description: "Base asset volume bought by market takers executing against asks."
+        expr: taker_buy_base_asset_volume
+        agg: sum
+
+      - name: taker_sell_volume_btc
+        description: "Base asset volume sold by market takers executing against bids."
+        expr: taker_sell_base_asset_volume
+        agg: sum
+
+      - name: taker_buy_volume_usd
+        description: "Quote asset volume spent by market takers."
+        expr: taker_buy_quote_asset_volume
+        agg: sum
+
+      - name: taker_sell_volume_usd
+        description: "Quote asset volume received by market takers."
+        expr: taker_sell_quote_asset_volume
+        agg: sum
+
+      - name: max_high_price
+        description: "Maximum recorded price reached during the period."
+        expr: high
+        agg: max
+
+      - name: min_low_price
+        description: "Minimum recorded price reached during the period."
+        expr: low
+        agg: min
+
+      - name: avg_rsi_14s
+        description: "Average 14-second Relative Strength Index momentum."
+        expr: rsi_14_sec
+        agg: average
+
+      - name: avg_realized_volatility_60s
+        description: "Average 60-second rolling realized volatility."
+        expr: realized_volatility_60s
+        agg: average
+
+      - name: avg_candle_spread
+        description: "Average price spread (High minus Low) in USDT."
+        expr: candle_spread
+        agg: average
+
+      - name: avg_buy_sell_imbalance
+        description: "Average order flow imbalance ratio between taker buy and sell volumes."
+        expr: buy_sell_imbalance
+        agg: average
+
+  # =========================================================================
+  # 2. Date Dimension Semantic Model (dim_date - UTC)
+  # =========================================================================
+  - name: dim_date
+    model: ref('dim_date')
+    description: "Date dimension supporting temporal aggregations in UTC."
+
+    entities:
+      - name: date_utc
+        type: primary
+        expr: date_key
+
+    dimensions:
+      - name: calendar_date
+        type: time
+        type_params:
+          time_granularity: day
+
+      - name: day_of_week
+        type: categorical
+
+      - name: month_name
+        type: categorical
+
+      - name: calendar_quarter
+        type: categorical
+        expr: quarter
+
+      - name: calendar_year
+        type: categorical
+        expr: year
+
+      - name: is_weekend
+        type: categorical
+
+  # =========================================================================
+  # 3. Role-Playing Date Dimension Semantic Model (dim_date - Cairo)
+  # =========================================================================
+  - name: dim_date_cairo
+    model: ref('dim_date')
+    description: "Role-playing date dimension supporting temporal aggregations in Cairo local time."
+
+    entities:
+      - name: date_eg
+        type: primary
+        expr: date_key
+
+    dimensions:
+      - name: cairo_calendar_date
+        type: time
+        expr: calendar_date
+        type_params:
+          time_granularity: day
+
+      - name: cairo_day_of_week
+        type: categorical
+        expr: day_of_week
+
+      - name: cairo_month_name
+        type: categorical
+        expr: month_name
+
+      - name: cairo_quarter
+        type: categorical
+        expr: quarter
+
+      - name: cairo_year
+        type: categorical
+        expr: year
+
+      - name: cairo_is_weekend
+        type: categorical
+        expr: is_weekend
+
+  # =========================================================================
+  # 4. Time Dimension Semantic Model (dim_time - UTC)
+  # =========================================================================
+  - name: dim_time
+    model: ref('dim_time')
+    description: "Time dimension supporting second-level intra-day aggregations in UTC."
+
+    entities:
+      - name: time_utc
+        type: primary
+        expr: time_key
+
+    dimensions:
+      - name: time_of_day
+        type: categorical
+
+      - name: hour_of_day
+        type: categorical
+
+      - name: minute_of_hour
+        type: categorical
+
+      - name: second_of_minute
+        type: categorical
+
+  # =========================================================================
+  # 5. Role-Playing Time Dimension Semantic Model (dim_time - Cairo)
+  # =========================================================================
+  - name: dim_time_cairo
+    model: ref('dim_time')
+    description: "Role-playing time dimension supporting second-level aggregations in Cairo local time."
+
+    entities:
+      - name: time_eg
+        type: primary
+        expr: time_key
+
+    dimensions:
+      - name: cairo_time_of_day
+        type: categorical
+        expr: time_of_day
+
+      - name: cairo_hour_of_day
+        type: categorical
+        expr: hour_of_day
+
+      - name: cairo_minute_of_hour
+        type: categorical
+        expr: minute_of_hour
+
+      - name: cairo_second_of_minute
+        type: categorical
+        expr: second_of_minute
+
+  # =========================================================================
+  # 6. Market Regime Dimension Semantic Model (dim_market_regime)
+  # =========================================================================
+  - name: dim_market_regime
+    model: ref('dim_market_regime')
+    description: "Market regime dimension categorizing volatility, RSI, and order flow states."
+
+    entities:
+      - name: market_regime
+        type: primary
+        expr: market_regime_key
+
+    dimensions:
+      - name: rsi_regime
+        type: categorical
+
+      - name: imbalance_regime
+        type: categorical
+
+      - name: volatility_regime
+        type: categorical
+
+      - name: spread_category
+        type: categorical
+
+      - name: is_volatility_spike
+        type: categorical
+
+      - name: extreme_wick_flag
+        type: categorical
