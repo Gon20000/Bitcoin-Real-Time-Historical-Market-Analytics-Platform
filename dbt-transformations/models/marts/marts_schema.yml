@@ -3,6 +3,8 @@ version: 2
 models:
   - name: dim_date
     description: "Calendar date dimension supporting UTC and Egyptian local time analysis"
+    time_spine:
+      standard_granularity_column: calendar_date
     columns:
       - name: date_key
         description: "Primary surrogate key (YYYYMMDD)"

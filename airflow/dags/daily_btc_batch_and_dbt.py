@@ -122,6 +122,7 @@ with DAG(
             "--conf spark.sql.extensions=io.delta.sql.DeltaSparkSessionExtension "
             "--conf spark.sql.catalog.spark_catalog=org.apache.spark.sql.delta.catalog.DeltaCatalog "
             "--conf spark.sql.session.timeZone=UTC "
+            "--conf spark.driver.host=airflow-scheduler "
             "/opt/airflow/spark-jobs/batch_historical_ingest.py; "
             "else "
             "echo 'ERROR: /opt/spark/bin/spark-submit client not found. Cannot submit batch historical ingest.' >&2; "

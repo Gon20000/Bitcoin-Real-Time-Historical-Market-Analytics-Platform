@@ -7,6 +7,8 @@ semantic_models:
   - name: btc_klines_1s
     model: ref('fct_btc_klines_1s')
     description: "1-second Bitcoin klines fact table providing high-frequency trading metrics and financial indicators."
+    defaults:
+      agg_time_dimension: candle_time
 
     entities:
       - name: candle
@@ -27,6 +29,13 @@ semantic_models:
       - name: market_regime
         type: foreign
         expr: market_regime_key
+
+    dimensions:
+      - name: candle_time
+        type: time
+        expr: DATE_PARSE(CAST(fact_key AS VARCHAR), '%Y%m%d%H%i%s')
+        type_params:
+          time_granularity: day
 
     measures:
       - name: total_volume_btc
@@ -118,11 +127,13 @@ semantic_models:
       - name: month_name
         type: categorical
 
-      - name: quarter
+      - name: calendar_quarter
         type: categorical
+        expr: quarter
 
-      - name: year
+      - name: calendar_year
         type: categorical
+        expr: year
 
       - name: is_weekend
         type: categorical
