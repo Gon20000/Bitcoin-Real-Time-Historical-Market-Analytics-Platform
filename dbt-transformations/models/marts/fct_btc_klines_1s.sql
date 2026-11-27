@@ -77,6 +77,7 @@ vol_ma_step AS (
     SELECT
         *,
         AVG(realized_volatility_60s) OVER (ORDER BY open_time ROWS BETWEEN 299 PRECEDING AND CURRENT ROW) AS ma_vol_300s,
+        AVG(candle_spread) OVER (ORDER BY open_time ROWS BETWEEN 299 PRECEDING AND CURRENT ROW) AS ma_spread_300s,
         -- RSI is calculated entirely in DECIMAL arithmetic to prevent floating-point drift
         CASE
             WHEN avg_loss_14 = 0 AND avg_gain_14 = 0 THEN CAST(50 AS DECIMAL(18, 8))
@@ -126,7 +127,11 @@ regime_categories AS (
             ELSE FALSE
         END AS is_volatility_spike,
         CASE
-            WHEN candle_spread > 50 THEN TRUE
+            WHEN ma_spread_300s IS NOT NULL
+                AND ma_spread_300s > 0
+                AND candle_spread > (5 * ABS(close - open))
+                AND candle_spread > (3 * ma_spread_300s)
+            THEN TRUE
             ELSE FALSE
         END AS extreme_wick_flag
     FROM vol_ma_step

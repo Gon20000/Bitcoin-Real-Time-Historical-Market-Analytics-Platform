@@ -47,9 +47,9 @@ The Gold Layer is the business-level data representation, structured to support 
 | rsi_regime           | NVARCHAR(50)  | The classification of market momentum based on RSI: Overbought (rsi >= 70), Bullish (55 < rsi < 70), Neutral (45 <= rsi <= 55), Bearish (30 < rsi < 45), Oversold (rsi <= 30). |
 | imbalance_regime     | NVARCHAR(50)  | Categorization of order flow imbalance ratio into defined intervals: Heavy Buying (imbalance > +0.50), Moderate Buying (+0.15 < imbalance <= +0.50), Neutral (-0.15 <= imbalance <= +0.15), Moderate Selling (-0.50 <= imbalance < -0.15), Heavy Selling (imbalance < -0.50). |
 | volatility_regime    | NVARCHAR(50)  | The classification of market volatility: Extreme (vol > 0.015), High (vol > 0.008), Moderate (vol > 0.003), Low / Squeeze (vol <= 0.003). |
-| spread_category      | NVARCHAR(50)  | The category of the candlestick price spread (e.g., 'Wide', 'Normal', 'Compressed').         |
+| spread_category      | NVARCHAR(50)  | The category of the candlestick price spread: Wide (spread > 20.00 USDT), Normal (5.00 <= spread <= 20.00 USDT), Compressed (spread < 5.00 USDT). |
 | is_volatility_spike  | BOOLEAN       | Indicates whether an abnormal volatility spike occurred (realized_vol_60s > 2.5 * MA(vol_60s, 300s)). |
-| extreme_wick_flag    | BOOLEAN       | Indicates whether the candle has an extreme noise wick requiring cleaning (e.g., 'TRUE', 'FALSE'). |
+| extreme_wick_flag    | BOOLEAN       | Indicates whether the candle has an extreme noise wick requiring cleaning: TRUE when candle_spread > 5 * ABS(close - open) AND candle_spread > 3 * MA(candle_spread, 300s). |
 
 ---
 
