@@ -35,7 +35,9 @@ DEFAULT_OUTPUT_DIR = os.getenv(
 )
 
 # The previous Delta append sink used a different checkpoint.
-CHECKPOINT_DIR = "/opt/spark/checkpoints/streaming_silver_merge"
+CHECKPOINT_DIR = os.getenv(
+    "CHECKPOINT_DIR", "/opt/spark/checkpoints/streaming_silver_merge"
+)
 
 
 def get_spark_session() -> SparkSession:
@@ -210,6 +212,7 @@ def main() -> None:
             transform_kafka_to_silver(kafka_df)
             .writeStream.outputMode("append")
             .foreachBatch(merge_into_silver)
+            .trigger(processingTime="10 seconds")
             .option("checkpointLocation", CHECKPOINT_DIR)
             .start()
         )
