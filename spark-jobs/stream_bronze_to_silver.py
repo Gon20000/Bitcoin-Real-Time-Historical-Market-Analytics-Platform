@@ -1,7 +1,7 @@
 import os
-from pyspark.sql import DataFrame, SparkSession 
-from pyspark.sql import functions as F 
-from pyspark.sql import types as T  
+from pyspark.sql import DataFrame, SparkSession
+from pyspark.sql import functions as F
+from pyspark.sql import types as T
 
 KLINE_FIELDS = {
     "t": "open_time",
@@ -34,7 +34,8 @@ DEFAULT_OUTPUT_DIR = os.getenv(
     "OUTPUT_DIR", "/opt/spark/data/silver/stg_binance_klines_1s"
 )
 
-CHECKPOINT_DIR = "/opt/spark/checkpoints/streaming_silver"
+# The previous Delta append sink used a different checkpoint.
+CHECKPOINT_DIR = "/opt/spark/checkpoints/streaming_silver_merge"
 
 
 def get_spark_session() -> SparkSession:
@@ -56,7 +57,6 @@ def get_spark_session() -> SparkSession:
 
 
 def normalize_to_silver(raw_df: DataFrame) -> DataFrame:
-    
     decimal_type = T.DecimalType(18, 8)
 
     cleaned_df = (
@@ -145,7 +145,6 @@ def normalize_to_silver(raw_df: DataFrame) -> DataFrame:
 
 
 def transform_kafka_to_silver(kafka_df: DataFrame) -> DataFrame:
-    
     klines = kafka_df.select(
         F.from_json(F.col("value").cast("string"), MESSAGE_SCHEMA)
         .getField("k")
@@ -161,11 +160,37 @@ def transform_kafka_to_silver(kafka_df: DataFrame) -> DataFrame:
     return normalize_to_silver(raw_df)
 
 
-def main() -> None:
+def merge_into_silver(batch_df: DataFrame, _batch_id: int) -> None:
+    candles = batch_df.dropDuplicates(["open_time"])
+    (
+        candles.limit(0)
+        .write.format("delta")
+        .mode("ignore")
+        .partitionBy("year", "month")
+        .save(DEFAULT_OUTPUT_DIR)
+    )
 
+    spark = candles.sparkSession
+    output_path = DEFAULT_OUTPUT_DIR.replace("`", "``")
+    candles.createOrReplaceTempView("streaming_silver_candles")
+    try:
+        spark.sql(
+            f"""
+            MERGE INTO delta.`{output_path}` AS target
+            USING streaming_silver_candles AS source
+            ON target.year = source.year
+                AND target.month = source.month
+                AND target.open_time = source.open_time
+            WHEN NOT MATCHED THEN INSERT *
+            """
+        )
+    finally:
+        spark.catalog.dropTempView("streaming_silver_candles")
+
+
+def main() -> None:
     spark = get_spark_session()
     try:
-      
         spark.conf.set("spark.sql.caseSensitive", "true")
         spark.sparkContext.setLogLevel("WARN")
 
@@ -183,11 +208,10 @@ def main() -> None:
         )
         query = (
             transform_kafka_to_silver(kafka_df)
-            .writeStream.format("delta")
-            .outputMode("append")
-            .partitionBy("year", "month")
+            .writeStream.outputMode("append")
+            .foreachBatch(merge_into_silver)
             .option("checkpointLocation", CHECKPOINT_DIR)
-            .start(DEFAULT_OUTPUT_DIR)
+            .start()
         )
         query.awaitTermination()
     finally:
