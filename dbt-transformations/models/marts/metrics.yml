@@ -39,12 +39,12 @@ metrics:
     type_params:
       measure: avg_realized_volatility_60s
 
-  - name: average_order_imbalance
-    label: "Average Order Flow Imbalance"
-    description: "Average taker buy vs sell imbalance ratio."
+  - name: average_candle_spread
+    label: "Average Candle Spread (USDT)"
+    description: "Average price spread (High minus Low) in USDT per 1-second candle."
     type: simple
     type_params:
-      measure: avg_buy_sell_imbalance
+      measure: avg_candle_spread
 
   - name: period_max_high_price
     label: "Max High Price"
@@ -120,3 +120,13 @@ metrics:
       metrics:
         - name: period_max_high_price
         - name: period_min_low_price
+
+  - name: average_order_imbalance
+    label: "Average Order Flow Imbalance"
+    description: "Volume-weighted taker buy vs sell imbalance ratio (Net Taker Flow / Total BTC Volume)."
+    type: derived
+    type_params:
+      expr: net_taker_volume_flow_btc / NULLIF(bitcoin_trading_volume_btc, 0)
+      metrics:
+        - name: net_taker_volume_flow_btc
+        - name: bitcoin_trading_volume_btc
