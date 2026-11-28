@@ -133,6 +133,7 @@ def _extract_verified_csv(file_path: Path, csv_file: Path, csv_filename: str) ->
 
                 if (
                     not member.filename
+                    or member.filename.startswith("/")
                     or member_path.is_absolute()
                     or ".." in member_path.parts
                     or "\\" in member.filename
