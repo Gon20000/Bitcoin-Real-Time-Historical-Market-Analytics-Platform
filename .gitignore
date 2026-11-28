@@ -80,7 +80,6 @@ ipython_config.py
 !.env.example
 
 # Local Data Lake & Checkpoints
-data/
 airflow/logs/
 
 # PyCharm

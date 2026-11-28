@@ -1,6 +1,7 @@
 .PHONY: help init build up-full up-stream up-orch up-analytics down logs clean \
         spark-batch dbt-shell dbt-run dbt-test test lint
 
+export AIRFLOW_UID ?= $(shell id -u)
 # Default target
 help:
 	@echo "BTC/USDT 1-Second Analytics Platform - CLI Shortcuts"
@@ -29,6 +30,7 @@ init:
 	mkdir -p data/bronze data/silver data/gold data/checkpoints
 	mkdir -p airflow/dags airflow/logs airflow/plugins airflow/config trino/etc/catalog
 	@echo "Local Medallion data lake directories initialized."
+	pip install "apache-airflow==2.10.2" "pendulum==3.0.0" "pre-commit>=3.7.0" "pytest>=8.0.0" --constraint "https://raw.githubusercontent.com/apache/airflow/constraints-2.10.2/constraints-3.11.txt"
 	pip install -r requirements-dev.txt
 	pre-commit install
 	@echo "Dev dependencies installed and pre-commit hooks activated."
@@ -44,8 +46,6 @@ up-stream:
 	docker compose --profile streaming up -d
 
 up-orch:
-	@echo "Setting open permissions for Docker volumes..."
-	chmod -R 777 airflow/dags airflow/logs airflow/plugins airflow/config
 	@echo "Starting orchestration layer..."
 	docker compose --profile orchestration up -d
 
